@@ -296,7 +296,7 @@ function viewSettings() {
       <p class="muted small" style="margin:0">${liveProxy() ? '✓ Using your OpenSky server.' : 'Leave empty unless live position doesn’t show up.'}</p></div>
     <h2>Sync server</h2><div class="card">${syncServerHtml()}</div>
     <h2>Data</h2><div class="card"><div class="actions" style="margin:0"><button class="btn sm" data-act="backup">Download backup</button><button class="btn sm" data-act="restore">Restore backup</button><button class="btn sm danger" data-act="wipe">Delete all data</button></div></div>
-    <p class="muted small" style="text-align:center">Contrail · version 11</p>`;
+    <p class="muted small" style="text-align:center">Contrail · version 12</p>`;
 }
 
 // ---------- Sheets ----------
@@ -373,6 +373,7 @@ function globeStyle() {
 function makeGlobe(box, { interactive = true, center = [10, 30], zoom = 1.2 } = {}) {
   const map = new (ML().Map)({ container: box, style: globeStyle(), center, zoom, interactive, attributionControl: { compact: true }, renderWorldCopies: false, maxZoom: 9 });
   map._markers = [];
+  map.on('rotate', () => map.getContainer().querySelectorAll('.gplane2 .hdg').forEach(e => { e.style.transform = `rotate(${+e.dataset.h - map.getBearing()}deg)`; }));
   map._ready = new Promise(res => map.on('load', () => {
     map.resize();
     map.addSource('routes', { type: 'geojson', data: { type: 'FeatureCollection', features: [] } });
@@ -412,17 +413,20 @@ async function showRoutes(map, flights, focus, opts = {}) {
     const line = gcLine(f.from, f.to, 96);
     if (focus && f.id === focus.id) {
       const ph = phase(f);
-      let cut = Math.round(Math.max(0, Math.min(1, ph.p)) * (line.length - 1));
-      if (ph.key === 'air' && liveFresh(f)) { let best = 1e9; line.forEach((pt, i) => { const d = (pt[0] - f.livePos.lat) ** 2 + (pt[1] - f.livePos.lon) ** 2; if (d < best) { best = d; cut = i; } }); }
-      feats.push(lineFeat(line, 'main', f.id));
-      if (cut > 0) feats.push(lineFeat(line.slice(0, cut + 1), 'done', f.id));
       if (ph.key === 'air') {
-        const el = document.createElement('div'); el.className = 'gplane' + (liveFresh(f) ? ' live' : '');
-        let pos, rot;
-        if (liveFresh(f)) { pos = [f.livePos.lat, f.livePos.lon]; rot = f.livePos.track ?? 0; }
-        else { const p = line[cut], q = line[Math.min(cut + 1, line.length - 1)]; pos = p; rot = bearing(p, q); }
-        el.innerHTML = planeSvg(rot, 30);
+        // Split the route at the plane: flown part = origin → plane, remaining = plane → destination,
+        // so the plane always sits exactly on its path (live position or time-based estimate).
+        const isLive = liveFresh(f);
+        const pos = isLive ? [f.livePos.lat, f.livePos.lon] : gcPoint(f.from, f.to, Math.max(0.001, Math.min(0.999, ph.p)));
+        const P = { lat: pos[0], lon: pos[1] }, done = gcLine(f.from, P, 48), rest = gcLine(P, f.to, 72);
+        const hdg = isLive && f.livePos.track != null ? f.livePos.track : bearing(rest[0], rest[1] || rest[0]);
+        feats.push(lineFeat(rest, 'main', f.id), lineFeat(done, 'done', f.id));
+        const el = document.createElement('div'); el.className = 'gplane2' + (isLive ? ' live' : '');
+        el.innerHTML = `<svg class="hdg" data-h="${hdg}" viewBox="0 0 48 48" style="transform:rotate(${hdg - map.getBearing()}deg)"><path d="M24 0 L30.5 9 L17.5 9 Z" fill="currentColor"/></svg>${logo(f.num.slice(0, 2))}`;
         map._markers.push(new (ML().Marker)({ element: el }).setLngLat([pos[1], pos[0]]).addTo(map));
+      } else {
+        feats.push(lineFeat(line, 'main', f.id));
+        if (ph.key === 'landed') feats.push(lineFeat(line, 'done', f.id));
       }
     } else feats.push(lineFeat(line, 'dim', f.id));
   });
