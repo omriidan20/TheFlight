@@ -285,6 +285,13 @@ body.home .maplibregl-ctrl-bottom-right{bottom:auto;top:calc(52px + env(safe-are
 .gplane.live{filter:drop-shadow(0 0 10px rgba(126,240,220,1))}
 .srcnote.live{color:var(--text);background:rgba(255,255,255,.06);border:1px solid var(--stroke-lo);border-radius:14px;padding:10px 12px;margin:0 0 10px}
 .srcnote.live.bad{color:var(--bad)}
+.alogo{position:relative;display:inline-grid;width:26px;height:26px;flex:none}
+.alogo .badge{width:100%;height:100%}
+.alogo img{position:absolute;inset:0;width:100%;height:100%;object-fit:contain;background:#fff;border-radius:7px;padding:2px;box-sizing:border-box;box-shadow:0 1px 3px rgba(0,0,0,.3)}
+.alogo.lg{width:46px;height:46px}.alogo.lg img{border-radius:12px;padding:4px}
+.fr-top .alogo{width:22px;height:22px}.fr-top .alogo img{border-radius:6px}
+.listhd{display:flex;justify-content:space-between;align-items:center;margin:4px 4px 10px}.listhd b{font-size:20px;letter-spacing:-.02em}
+.listhd .link{padding:0}
 </style>
 </head>
 <body>
@@ -297,8 +304,8 @@ body.home .maplibregl-ctrl-bottom-right{bottom:auto;top:calc(52px + env(safe-are
 <nav class="tabs" id="tabs"></nav>
 <input type="file" id="icsFile" accept=".ics,text/calendar" hidden>
 <input type="file" id="backupFile" accept=".json,application/json" hidden>
-<script src="airports.js?v=10"></script>
+<script src="airports.js?v=11"></script>
 <script src="https://unpkg.com/maplibre-gl@5/dist/maplibre-gl.js" defer></script>
-<script src="app.js?v=10"></script>
+<script src="app.js?v=11"></script>
 </body>
 </html>
