@@ -655,7 +655,12 @@ function afUpdate() {
 }
 async function afSearch(key) {
   const p = AF.p; let r = null;
-  if (S.settings.apiKey) { try { const res = await lookupFlight(p.num, AF.date); if (res?.length) r = { ...res[0], full: true, legs: res }; } catch (e) {} }
+  AF.live = null; AF.dates = null;
+  if (S.settings.apiKey) {
+    try { const res = await lookupFlight(p.num, AF.date); if (res?.length) r = { ...res[0], full: true, legs: res }; else AF.live = 'noflight'; }
+    catch (e) { const c = +(e.message.match(/\((\d+)\)/) || [])[1]; AF.live = c === 401 || c === 403 ? 'rejected' : c === 429 ? 'quota' : 'error'; AF.liveMsg = e.message; }
+    if (AF.live === 'noflight') flightDates(p.num, AF.date).then(d => { if (AF && AF.key === key && d?.length) { AF.dates = d; afBody(); } });
+  }
   if (!r && AF.pre?.from && AF.pre?.to && (!AF.pre.num || parseFlight(AF.pre.num)?.num === p.num)) r = { from: getAirport(AF.pre.from), to: getAirport(AF.pre.to) };
   if (!r) { const mine = live(S.flights).filter(f => f.num === p.num && f.from?.iata && f.to?.iata && f.source !== 'route' && f.routeSrc !== 'public').sort((a, b) => depT(b) - depT(a))[0]; if (mine) r = { from: mine.from, to: mine.to, src: 'history' }; }
   if (!r) { const fr = await freeRoute(p.num); if (fr) r = { ...fr, src: 'public' }; }
@@ -668,7 +673,7 @@ function afBody() {
   if (AF.state === 'searching') { b.innerHTML = `<div class="card searching"><span class="spin"></span>Finding ${esc(AF.p.num)}…</div>`; return; }
   const r = AF.route, pre = AF.pre || {};
   if (AF.state === 'manual') {
-    b.innerHTML = `<div class="card"><p class="small muted" style="margin-top:0">${AF.pre?.from ? 'Set the right airports' : `Couldn’t find the route for <b>${esc(AF.p.num)}</b> automatically. Just add the airports`}:</p>
+    b.innerHTML = `<div class="card">${liveNote()}<p class="small muted" style="margin-top:0">${AF.pre?.from ? 'Set the right airports' : `Couldn’t find the route for <b>${esc(AF.p.num)}</b> automatically. Just add the airports`}:</p>
       <div class="row"><label class="f"><span>From</span><input id="af_from" placeholder="Airport code" list="apList" maxlength="4" autocapitalize="characters" value="${esc(pre.from || '')}"></label><label class="f"><span>To</span><input id="af_to" placeholder="Airport code" list="apList" maxlength="4" autocapitalize="characters" value="${esc(pre.to || '')}"></label></div>
       ${afTimes(null, null)}<button class="btn pri block" data-act="af-add">Add flight</button></div>`; return;
   }
@@ -681,9 +686,28 @@ function afBody() {
       <div class="ap right"><div class="code">${esc(r.to.iata)}</div><div class="city" style="margin-left:auto">${cityOf(r.to)}</div>${r.full ? `<div class="t">${fmtTime(r.arrSched, r.to.tz)}</div>` : ''}</div></div>
     ${r.full ? `<div class="srcnote ok">✓ Live schedule${r.status ? ' · ' + esc(r.status) : ''}${r.gateDep ? ' · Gate ' + esc(r.gateDep) : ''}${r.terminalDep ? ' · Terminal ' + esc(r.terminalDep) : ''}</div>`
       : r.src === 'history' ? `<div class="srcnote">Route from your previous ${esc(AF.p.num)} flight · <button class="link inl" data-act="af-change">Change</button></div>`
-      : `<div class="srcnote warn">⚠︎ Route from a public database and may be outdated — check it. <button class="link inl" data-act="af-change">Change airports</button>${S.settings.apiKey ? '' : '<br>For exact times, gates and delays, <button class="link inl" data-act="goto-live">turn on live data</button> (free).'}</div>`}
+      : `${liveNote()}<div class="srcnote warn">⚠︎ Route from a public database and may be outdated — check it. <button class="link inl" data-act="af-change">Change airports</button>${S.settings.apiKey ? '' : '<br>For exact times, gates and delays, <button class="link inl" data-act="goto-live">turn on live data</button> (free).'}</div>`}
     ${r.full ? '' : afTimes(r.from, r.to)}
     <button class="btn pri block" data-act="af-add" style="margin-top:12px">Add flight</button></div>`;
+}
+function liveNote() {
+  if (!AF.live) return '';
+  const d = fmtDate(zonedToUtc(AF.date, '12:00', DEVICE_TZ), DEVICE_TZ);
+  const chips = AF.dates?.length ? `<div class="chips" style="padding:8px 0 0">${AF.dates.slice(0, 6).map(x => `<button class="chipbtn" data-act="af-date" data-d="${x}">${fmtDate(zonedToUtc(x, '12:00', DEVICE_TZ), DEVICE_TZ)}</button>`).join('')}</div>` : '';
+  const msg = AF.live === 'noflight' ? `Live data has no <b>${esc(AF.p.num)}</b> on <b>${d}</b>.${AF.dates?.length ? ' It flies on:' : ' Try another date.'}`
+    : AF.live === 'rejected' ? 'Your live-data key wasn’t accepted. Make sure you subscribed to AeroDataBox’s free <b>Basic</b> plan on RapidAPI, then <button class="link inl" data-act="goto-live">test the key</button>.'
+    : AF.live === 'quota' ? 'You’ve used this month’s free live-data lookups.'
+    : `Live data didn’t respond (${esc(AF.liveMsg || 'network error')}).`;
+  return `<div class="srcnote live ${AF.live === 'noflight' ? '' : 'bad'}">${msg}${chips}</div>`;
+}
+async function flightDates(num, date) {
+  try {
+    const from = date, to = localDate(zonedToUtc(date, '12:00', DEVICE_TZ) + 20 * 864e5, DEVICE_TZ);
+    const r = await fetch(`https://aerodatabox.p.rapidapi.com/flights/number/${encodeURIComponent(num)}/dates/${from}/${to}`, { headers: { 'X-RapidAPI-Key': S.settings.apiKey, 'X-RapidAPI-Host': 'aerodatabox.p.rapidapi.com' } });
+    if (!r.ok) return null;
+    const j = await r.json(); const arr = Array.isArray(j) ? j : j.items || j.dates || [];
+    return [...new Set(arr.map(x => String(typeof x === 'string' ? x : x.date || x.dateLocal || x.scheduledDateLocal || '').slice(0, 10)).filter(x => /^\d{4}-\d\d-\d\d$/.test(x) && x !== date))].sort();
+  } catch (e) { return null; }
 }
 function afTimes(from, to) {
   const pre = AF.pre || {};
@@ -1213,7 +1237,7 @@ document.addEventListener('click', async e => {
   switch (t.dataset.act) {
     case 'close': closeSheet(); break;
     case 'add': openAdd(); break;
-    case 'af-date': AF.date = t.dataset.d; afDates(); afUpdate(); break;
+    case 'af-date': AF.date = t.dataset.d; AF.key = ''; afDates(); afUpdate(); break;
     case 'af-add': afAdd(); break;
     case 'af-change': AF.pre = { ...(AF.pre || {}), from: AF.route?.from?.iata, to: AF.route?.to?.iata, num: '' }; AF.route = null; AF.state = 'manual'; afBody(); break;
     case 'goto-live': closeSheet(); tab = 'settings'; render(); setTimeout(() => $('#liveCard')?.scrollIntoView({ behavior: 'smooth', block: 'center' }), 50); break;
