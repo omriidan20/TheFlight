@@ -1,11 +1,11 @@
 rules_version = '2';
 // Contrail security rules: Google sign-in only, admin approves members, admin-only system settings.
-// Replace YOUR_GOOGLE_EMAIL with the Google account email of the admin.
+// Replace omriidan20@gmail.com with the Google account email of the admin.
 service cloud.firestore {
   match /databases/{database}/documents {
     function signedIn() { return request.auth != null; }
     function isGoogle() { return signedIn() && request.auth.token.firebase.sign_in_provider == 'google.com'; }
-    function isAdmin()  { return isGoogle() && request.auth.token.email == 'YOUR_GOOGLE_EMAIL' && request.auth.token.email_verified == true; }
+    function isAdmin()  { return isGoogle() && request.auth.token.email == 'omriidan20@gmail.com' && request.auth.token.email_verified == true; }
     function isMember() {
       return isAdmin() || (isGoogle()
         && exists(/databases/$(database)/documents/members/$(request.auth.uid))
@@ -23,6 +23,11 @@ service cloud.firestore {
       allow list: if isAdmin();
       allow create: if isGoogle() && request.auth.uid == uid && request.resource.data.status == 'pending';
       allow update, delete: if isAdmin();
+    }
+    // Flight-alert subscriptions. Encrypted in the app so only the alert sender can read them.
+    match /push/{uid} {
+      allow read: if true;
+      allow write: if request.auth != null && request.auth.uid == uid && isMember();
     }
     // Each member's own flights
     match /users/{uid} {

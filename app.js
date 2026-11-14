@@ -34,7 +34,7 @@ function save(sync = true) {
   if (!account) return;
   try { localStorage.setItem(dataKey(), JSON.stringify(S)); } catch (e) {}
   if (sync) schedulePush();
-  scheduleReminders();
+  scheduleReminders(); scheduleAlertSync();
 }
 const live = arr => arr.filter(f => !f.deleted);
 const uid = () => Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
@@ -284,6 +284,7 @@ function computeStats(year) {
   const top = o => Object.entries(o).sort((a, b) => b[1] - a[1]).slice(0, 5);
   return { fl, km, ms, airports, countries, airlines: top(airlines), routes: top(routes), aircraft: top(aircraft), longest };
 }
+const alertsOn = () => !!S.settings.push && canPush() && Notification.permission === 'granted';
 function viewSettings() {
   const st = S.settings;
   const acct = `<div style="display:flex;gap:14px;align-items:center"><div class="avatar lg" style="${avatarStyle(account.username)}">${esc(initials(account.username))}</div>
@@ -293,10 +294,15 @@ function viewSettings() {
   return `${inst}<h2>Account</h2><div class="card">${acct}</div>
     <h2>Profile</h2><div class="card"><label class="f"><span>Your name (shown when you share flights)</span><input id="setName" value="${esc(st.name)}" placeholder="e.g. Omri"></label>
       <label class="f" style="margin:0"><span>Distance units</span><select id="setUnits"><option value="mi" ${st.units === 'mi' ? 'selected' : ''}>Miles</option><option value="km" ${st.units === 'km' ? 'selected' : ''}>Kilometers</option></select></label></div>
-    <h2>Calendar</h2><div class="card"><div class="actions" style="margin:0"><button class="btn" data-act="import-ics">Import .ics file</button><button class="btn" data-act="export-ics">Export all to calendar</button></div>
-      <p class="muted small" style="margin-bottom:0">Export a calendar file from Google Calendar, Apple Calendar, Outlook or TripIt and import it — Contrail finds the flights automatically.</p></div>
-    <h2>Notifications</h2><div class="card"><button class="btn" data-act="notify">${st.notify && 'Notification' in window && Notification.permission === 'granted' ? '✓ Reminders on' : 'Turn on departure reminders'}</button>
-      <p class="muted small" style="margin-bottom:0">Reminders 3 hours and 45 minutes before departure, and when you land, while Contrail is open or installed.</p></div>
+    <h2>Calendar</h2><div class="card"><div class="actions" style="margin:0"><button class="btn pri" data-act="gcal">Import from Google Calendar</button><button class="btn" data-act="import-ics-file">Import .ics file</button><button class="btn" data-act="export-ics">Export all to calendar</button></div>
+      <p class="muted small" style="margin-bottom:0">Finds flights in your calendars automatically, including the ones Gmail adds. Read-only.</p></div>
+    <h2>Flight alerts</h2><div class="card">${alertsOn() ? `<p class="small" style="margin:0 0 10px">✓ <b>On for this device.</b> Gate changes, delays, cancellations, take-off and landing — even when Contrail is closed.</p>
+        <label class="chk"><input type="checkbox" id="pushLive" ${st.pushLive !== false ? 'checked' : ''}><div style="flex:1"><b>Live in-flight updates</b><div class="muted small">About once an hour: time left, distance and altitude</div></div></label>
+        <label class="chk"><input type="checkbox" id="pushFriends" ${st.pushFriends !== false ? 'checked' : ''}><div style="flex:1"><b>Friends’ flights</b><div class="muted small">Take-off and landing for flights friends shared with you</div></div></label>
+        <button class="btn sm" data-act="alerts-off" style="margin-top:8px">Turn off</button>`
+      : `<button class="btn pri" data-act="alerts-on">Turn on flight alerts</button><p class="muted small" style="margin-bottom:0">${isIOS && !isStandalone() ? 'On iPhone this works once Contrail is on your Home Screen.' : 'Gate changes, delays, take-off, live progress and landing — even when the app is closed.'}</p>`}</div>
+    <h2>Security</h2><div class="card">${lockCred() ? `<p class="small" style="margin:0 0 10px">✓ <b>Face ID lock is on.</b> Contrail asks for Face ID when you open it.</p><button class="btn sm" data-act="lock-off">Turn off</button>`
+      : `<button class="btn" data-act="lock-on">Lock with Face ID (passkey)</button><p class="muted small" style="margin-bottom:0">Creates a passkey on this device. Contrail then asks for Face ID, Touch ID or your passcode whenever you open it.</p>`}</div>
     <h2>Live flight data</h2><div class="card"><p class="small" style="margin:0">${SYS.adbKey ? '✓ <b>On.</b> Times, gates, delays and aircraft update automatically.' : 'Off. The admin hasn’t set up live data yet.'}</p><p class="muted small" style="margin:6px 0 0">Managed by the admin for everyone.</p></div>
     ${isAdmin ? `<h2>Admin</h2><div class="card" id="adminCard"><div class="muted small">Loading members…</div></div>
     <h2>System settings</h2><div class="card">
@@ -305,7 +311,7 @@ function viewSettings() {
       <div class="actions" style="margin:0"><button class="btn pri sm" data-act="sys-save">Save for everyone</button><button class="btn sm" data-act="test-key">Test key</button></div>
       <p class="muted small" style="margin-bottom:0">Only you can see or change these. Every member uses them.</p></div>` : ''}
     <h2>Data</h2><div class="card"><div class="actions" style="margin:0"><button class="btn sm" data-act="backup">Download backup</button><button class="btn sm" data-act="restore">Restore backup</button><button class="btn sm danger" data-act="wipe">Delete all data</button></div></div>
-    <p class="muted small" style="text-align:center">Contrail · version 26</p>`;
+    <p class="muted small" style="text-align:center">Contrail · version 27</p>`;
 }
 
 // ---------- Sheets ----------
@@ -1305,25 +1311,27 @@ function detectFlight(e) {
   let from = codes[0], to = codes[1];
   // "Flight to Paris (AF 23)" style: destination by city name
   if (!to) { const city = (summary.match(/flight to ([^(\n]+)/i) || [])[1]?.trim().toLowerCase(); if (city) { const hit = Object.values(AP).find(a => a.city.toLowerCase() === city); if (hit && hit.iata !== from) { to = hit.iata; } } }
-  const dep = icsTime(e.DTSTART); let arr = icsTime(e.DTEND);
+  const dep = e._dep || icsTime(e.DTSTART); let arr = e._arr || icsTime(e.DTEND);
   if (!dep) return null; if (!arr || arr <= dep) arr = dep + 2 * H;
   return { num: num || 'FLIGHT', airline: airlineOf(num), from: getAirport(from) || { iata: '???', tz: DEVICE_TZ }, to: getAirport(to) || { iata: '???', tz: DEVICE_TZ },
     depSched: dep, arrSched: arr, conf: ((e.DESCRIPTION?.val || '').match(/(?:confirmation|booking|record locator|PNR)[^A-Z0-9]{0,20}([A-Z0-9]{6})\b/i) || [])[1] || '',
     source: 'calendar', calUid: e.UID?.val || '' };
 }
-function importIcsText(text) {
-  const found = parseIcs(text).map(detectFlight).filter(Boolean);
-  if (!found.length) return sheet(`${sheetHd('Import from calendar')}<div class="empty"><p>No flights found in that calendar file.</p><p class="small">Contrail looks for flight numbers (like “UA 123”) and airport codes in event titles, locations and notes.</p></div>`);
+function importIcsText(text) { showFound(parseIcs(text).map(detectFlight).filter(Boolean), 'that calendar file'); }
+function showFound(found, where) {
+  if (!found.length) return sheet(`${sheetHd('Import from calendar')}<div class="empty"><p>No flights found in ${esc(where)}.</p><p class="small">Contrail looks for flight numbers (like “UA 123”) and airport codes in event titles, locations and notes.</p></div>`);
   const dupe = c => live(S.flights).some(f => (c.calUid && f.calUid === c.calUid) || (f.num === c.num && Math.abs(f.depSched - c.depSched) < 6 * H));
   window.__icsFound = found;
-  sheet(`${sheetHd(`Found ${found.length} flight${found.length > 1 ? 's' : ''}`)}
-    <div class="card" style="padding:0 4px">${found.map((c, i) => `<label class="chk"><input type="checkbox" data-ics="${i}" ${dupe(c) ? '' : 'checked'}>
-      <div style="flex:1"><b>${esc(c.num)}</b> ${esc(c.from.iata)} → ${esc(c.to.iata)}<div class="muted small">${fmtDate(c.depSched, c.from.tz, { weekday: 'short', month: 'short', day: 'numeric', year: 'numeric' })} · ${fmtTime(c.depSched, c.from.tz)}${dupe(c) ? ' · already added' : ''}</div></div></label>`).join('')}</div>
+  const now = Date.now();
+  sheet(`${sheetHd(`Found ${found.length} flight${found.length > 1 ? 's' : ''}`)}<p class="muted small" style="margin:-4px 4px 10px">From ${esc(where)}</p>
+    <div class="card" style="padding:0 4px">${found.map((c, i) => `<label class="chk"><input type="checkbox" data-ics="${i}" ${dupe(c) ? 'disabled' : 'checked'}>
+      <div style="flex:1"><b>${esc(c.num)}</b> ${esc(c.from.iata)} → ${esc(c.to.iata)}<div class="muted small">${fmtDate(c.depSched, c.from.tz, { weekday: 'short', month: 'short', day: 'numeric', year: 'numeric' })} · ${fmtTime(c.depSched, c.from.tz)}${dupe(c) ? ' · already added' : c.depSched < now ? ' · past' : ''}</div></div></label>`).join('')}</div>
     <p class="muted small">Flights with “???” airports can be fixed with Edit after importing${SYS.adbKey ? ', or refreshed from live data' : ''}.</p>
     <button class="btn pri" style="width:100%" data-act="ics-confirm">Import selected</button>`);
 }
 function confirmIcs() {
   const picks = [...document.querySelectorAll('[data-ics]')].filter(x => x.checked).map(x => window.__icsFound[+x.dataset.ics]);
+  if (!picks.length) return toast('Nothing selected');
   picks.forEach(c => S.flights.push(Object.assign({ id: uid(), updatedAt: Date.now() }, c)));
   save(); closeSheet(); tab = 'flights'; render(); toast(`Imported ${picks.length} flight${picks.length === 1 ? '' : 's'}`);
   if (SYS.adbKey) refreshAll();
@@ -1390,7 +1398,7 @@ function notify(title, body) {
 }
 function scheduleReminders() {
   reminderTimers.forEach(clearTimeout); reminderTimers = [];
-  if (!S.settings.notify) return;
+  if (!S.settings.notify || S.settings.push) return;
   const now = Date.now();
   live(S.flights).forEach(f => {
     [[depT(f) - 3 * H, `Time to head to ${f.from?.iata}`, `${f.num} departs at ${fmtTime(depT(f), f.from?.tz)}${f.terminalDep ? ', terminal ' + f.terminalDep : ''}`],
@@ -1398,6 +1406,151 @@ function scheduleReminders() {
      [arrT(f), `Welcome to ${apLabel(f.to)}`, `${f.num} has landed${f.baggage ? ' · Bags at belt ' + f.baggage : ''}`]]
       .forEach(([t, title, body]) => { if (t > now && t - now < 24 * H) reminderTimers.push(setTimeout(() => notify(title, body), t - now)); });
   });
+}
+
+// ---------- Face ID / passkey lock ----------
+const b64u = buf => btoa(String.fromCharCode(...new Uint8Array(buf))).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+const unb64u = s => Uint8Array.from(atob(s.replace(/-/g, '+').replace(/_/g, '/') + '==='.slice((s.length + 3) % 4)), c => c.charCodeAt(0));
+const lockKey = () => 'contrail.lock.' + (user?.uid || account?.username || '');
+const lockCred = () => localStorage.getItem(lockKey());
+const canPasskey = () => !!(window.PublicKeyCredential && navigator.credentials?.create) && location.protocol === 'https:';
+let lockedAt = 0, hiddenAt = 0;
+async function enableLock() {
+  if (!canPasskey()) return toast('Passkeys aren’t available here. Open Contrail from your Home Screen.');
+  try {
+    const okPlat = await PublicKeyCredential.isUserVerifyingPlatformAuthenticatorAvailable?.();
+    if (okPlat === false) return toast('This device has no Face ID, Touch ID or screen lock set up');
+    const c = await navigator.credentials.create({ publicKey: {
+      challenge: crypto.getRandomValues(new Uint8Array(32)), rp: { name: 'Contrail', id: location.hostname },
+      user: { id: new TextEncoder().encode((user?.uid || account.username).slice(0, 60)), name: user?.email || account.username, displayName: account.username },
+      pubKeyCredParams: [{ type: 'public-key', alg: -7 }, { type: 'public-key', alg: -257 }],
+      authenticatorSelection: { authenticatorAttachment: 'platform', residentKey: 'preferred', userVerification: 'required' }, timeout: 60000, attestation: 'none' } });
+    localStorage.setItem(lockKey(), b64u(c.rawId)); render(); toast('Face ID lock is on');
+  } catch (e) { if (e.name !== 'NotAllowedError') toast('Couldn’t create a passkey: ' + e.message); }
+}
+function disableLock() { localStorage.removeItem(lockKey()); render(); toast('Face ID lock is off'); }
+function showLock() {
+  if (!lockCred() || $('#lock')) return;
+  const d = document.createElement('div'); d.id = 'lock';
+  d.innerHTML = `<div class="lockbox"><img src="apple-touch-icon.png" alt=""><b>Contrail is locked</b><p class="muted small">${esc(user?.email || account.username)}</p>
+    <button class="btn pri block" data-act="unlock">Unlock with Face ID</button><button class="link" data-act="lock-out">Sign out</button></div>`;
+  document.body.appendChild(d); lockedAt = Date.now();
+  setTimeout(() => { if (!document.hidden) unlock(true); }, 350);
+}
+async function unlock(auto) {
+  const id = lockCred(); if (!id) return $('#lock')?.remove();
+  try {
+    await navigator.credentials.get({ publicKey: { challenge: crypto.getRandomValues(new Uint8Array(32)), rpId: location.hostname,
+      allowCredentials: [{ type: 'public-key', id: unb64u(id), transports: ['internal', 'hybrid'] }], userVerification: 'required', timeout: 60000 } });
+    const l = $('#lock'); if (l) { l.classList.add('out'); setTimeout(() => l.remove(), 260); }
+  } catch (e) { if (!auto) toast(e.name === 'NotAllowedError' ? 'Not unlocked' : e.message); }
+}
+document.addEventListener('visibilitychange', () => {
+  if (document.hidden) hiddenAt = Date.now();
+  else if (account && lockCred() && hiddenAt && Date.now() - hiddenAt > 2 * M) showLock();
+});
+
+// ---------- Flight alerts (Web Push, sent by the scheduled GitHub Action) ----------
+const PUSH_PUB = 'BOCaKFeb0udfN8yuh6kHG8wSh8u1_KJykdCZ-cuydHr68ql-_kWhP7RRFNvPNw3famzfGFM2GzjhkWPkHRvGiIw';
+const canPush = () => 'serviceWorker' in navigator && 'PushManager' in window && 'Notification' in window;
+let pushSig = '', pushSyncTimer = null;
+async function sealForServer(obj) {
+  const eph = await crypto.subtle.generateKey({ name: 'ECDH', namedCurve: 'P-256' }, true, ['deriveBits']);
+  const srv = await crypto.subtle.importKey('raw', unb64u(PUSH_PUB), { name: 'ECDH', namedCurve: 'P-256' }, false, []);
+  const bits = await crypto.subtle.deriveBits({ name: 'ECDH', public: srv }, eph.privateKey, 256);
+  const hk = await crypto.subtle.importKey('raw', bits, 'HKDF', false, ['deriveKey']);
+  const key = await crypto.subtle.deriveKey({ name: 'HKDF', hash: 'SHA-256', salt: new Uint8Array(0), info: new TextEncoder().encode('contrail-push-v1') }, hk, { name: 'AES-GCM', length: 256 }, false, ['encrypt']);
+  const iv = crypto.getRandomValues(new Uint8Array(12));
+  const ct = await crypto.subtle.encrypt({ name: 'AES-GCM', iv }, key, new TextEncoder().encode(JSON.stringify(obj)));
+  return { epk: b64u(await crypto.subtle.exportKey('raw', eph.publicKey)), iv: b64u(iv), ct: b64u(ct) };
+}
+function alertFlights() {
+  const now = Date.now(), slimA = a => ({ iata: a?.iata || '', tz: a?.tz || 'UTC', lat: a?.lat ?? null, lon: a?.lon ?? null, city: a?.city || '' });
+  const pick = (f, friend) => ({ id: f.id, num: f.num, cs: icaoCallsign(f.num), reg: f.aircraftReg || '', friend: friend || null, from: slimA(f.from), to: slimA(f.to),
+    depSched: f.depSched, arrSched: f.arrSched, depEst: f.depEst || null, arrEst: f.arrEst || null, gate: f.gateDep || '' });
+  const ok = f => f.depSched && phase(f).key !== 'cancel' && arrT(f) > now - 2 * H && depT(f) < now + 10 * 864e5 && /^[A-Z0-9]{2}\d+/.test(f.num || '');
+  return [...live(S.flights).filter(ok).map(f => pick(f)), ...live(S.friends).filter(ok).map(f => pick(f, f.sharedBy || 'Friend'))].slice(0, 40);
+}
+async function syncAlerts(force) {
+  if (!S.settings.push || !user || !fb || !canPush() || Notification.permission !== 'granted') return;
+  try {
+    const reg = await navigator.serviceWorker.ready; const sub = await reg.pushManager.getSubscription();
+    if (!sub) return;
+    const payload = { sub: sub.toJSON(), prefs: { live: S.settings.pushLive !== false, friends: S.settings.pushFriends !== false }, flights: alertFlights() };
+    const sig = JSON.stringify(payload); if (!force && sig === pushSig) return;
+    await fb.db.collection('push').doc(user.uid).set({ ...(await sealForServer(payload)), t: Date.now() }); pushSig = sig;
+  } catch (e) { console.warn('alerts sync', e); }
+}
+const scheduleAlertSync = () => { clearTimeout(pushSyncTimer); pushSyncTimer = setTimeout(syncAlerts, 2500); };
+async function enableAlerts() {
+  if (!canPush()) return toast(isIOS && !isStandalone() ? 'On iPhone, add Contrail to your Home Screen first, then turn alerts on from there' : 'Notifications aren’t supported in this browser');
+  if (!user) return toast('Sign in with Google first');
+  const p = await Notification.requestPermission();
+  if (p !== 'granted') return toast('Notifications are blocked — allow them in Settings → Notifications → Contrail');
+  try {
+    const reg = await navigator.serviceWorker.ready;
+    await reg.pushManager.getSubscription() || await reg.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: unb64u(PUSH_PUB) });
+    S.settings.push = true; S.settings.notify = false; save(false); await syncAlerts(true); render(); toast('Flight alerts are on');
+  } catch (e) { toast('Couldn’t turn on alerts: ' + e.message); }
+}
+async function disableAlerts() {
+  S.settings.push = false; save(false); render();
+  try { const reg = await navigator.serviceWorker.ready; const sub = await reg.pushManager.getSubscription(); await sub?.unsubscribe(); } catch (e) {}
+  try { await fb?.db.collection('push').doc(user.uid).delete(); } catch (e) {}
+  pushSig = ''; toast('Flight alerts are off');
+}
+
+// ---------- Google Calendar ----------
+const GCAL_SCOPE = 'https://www.googleapis.com/auth/calendar.readonly';
+let gcalToken = null;
+async function gcalAuth() {
+  if (gcalToken && gcalToken.exp > Date.now()) return gcalToken.t;
+  const prov = new firebase.auth.GoogleAuthProvider(); prov.addScope(GCAL_SCOPE); prov.setCustomParameters({ login_hint: user?.email || '' });
+  let res;
+  try { res = await fb.auth.currentUser.reauthenticateWithPopup(prov); }
+  catch (e) {
+    if (/popup-blocked|operation-not-supported/.test(e.code || '')) { sessionStorage.setItem('contrail.gcal', '1'); await fb.auth.currentUser.reauthenticateWithRedirect(prov); return null; }
+    throw e;
+  }
+  const t = res?.credential?.accessToken; if (!t) throw new Error('Google didn’t share calendar access');
+  gcalToken = { t, exp: Date.now() + 50 * M }; return t;
+}
+async function gcalFetch(path, t) {
+  const r = await fetch('https://www.googleapis.com/calendar/v3/' + path, { headers: { Authorization: 'Bearer ' + t } });
+  if (r.status === 401) { gcalToken = null; throw new Error('Calendar access expired, try again'); }
+  if (r.status === 403) { const j = await r.json().catch(() => ({})); throw new Error(/has not been used|disabled/i.test(JSON.stringify(j)) ? 'The Google Calendar API isn’t turned on for this app yet (admin: enable it in Google Cloud)' : 'Google Calendar refused access'); }
+  if (!r.ok) throw new Error('Google Calendar error ' + r.status);
+  return r.json();
+}
+const gEvent = ev => ({ SUMMARY: { val: ev.summary || '' }, LOCATION: { val: ev.location || '' }, DESCRIPTION: { val: (ev.description || '').replace(/<[^>]+>/g, ' ') }, UID: { val: 'g:' + (ev.iCalUID || ev.id) },
+  _dep: Date.parse(ev.start?.dateTime || ''), _arr: Date.parse(ev.end?.dateTime || '') });
+async function importGoogleCalendar(token) {
+  if (!user || !fb) return toast('Sign in with Google first');
+  const btns = document.querySelectorAll('[data-act=gcal]'); btns.forEach(b => { b.disabled = true; b.dataset.l = b.textContent; b.textContent = 'Reading calendar…'; });
+  try {
+    const t = token || await gcalAuth(); if (!t) return;
+    const cals = ((await gcalFetch('users/me/calendarList?minAccessRole=reader&maxResults=250', t)).items || []).filter(c => !/holiday|#contacts@|#weather/i.test(c.id));
+    const tMin = new Date(Date.now() - 2 * 365 * 864e5).toISOString(), tMax = new Date(Date.now() + 365 * 864e5).toISOString();
+    const evs = [];
+    await Promise.all(cals.map(async c => {
+      let page = '', n = 0;
+      do {
+        const j = await gcalFetch(`calendars/${encodeURIComponent(c.id)}/events?singleEvents=true&maxResults=2500&timeMin=${tMin}&timeMax=${tMax}${page ? '&pageToken=' + page : ''}`, t).catch(() => ({}));
+        (j.items || []).forEach(e => e.start?.dateTime && evs.push(e)); page = j.nextPageToken || ''; n++;
+      } while (page && n < 6);
+    }));
+    const seen = new Set(), found = evs.map(gEvent).map(detectFlight).filter(Boolean).filter(c => { const k = c.num + '|' + Math.round(c.depSched / H); if (seen.has(k)) return false; seen.add(k); return true; })
+      .sort((a, b) => b.depSched - a.depSched);
+    showFound(found, `Google Calendar (${cals.length} calendar${cals.length === 1 ? '' : 's'}, ${evs.length} events checked)`);
+  } catch (e) { if (!/popup-closed|cancelled-popup/.test(e.code || '')) toast(e.message || 'Couldn’t read Google Calendar', 4200); }
+  finally { btns.forEach(b => { b.disabled = false; b.textContent = b.dataset.l || 'Google Calendar'; }); }
+}
+function openCalImport() {
+  sheet(`${sheetHd('Import from calendar')}
+    <div class="card"><button class="btn pri block" data-act="gcal"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" style="vertical-align:-3px;margin-right:6px"><rect x="3" y="5" width="18" height="16" rx="3"/><path d="M3 10h18M8 3v4M16 3v4"/></svg>Google Calendar</button>
+      <p class="muted small" style="margin:10px 2px 0">Reads your calendars (read-only) and finds flights from the last 2 years and the next 12 months — including the ones Gmail adds automatically. Nothing in your calendar is changed.</p></div>
+    <div class="card"><button class="btn block" data-act="import-ics-file">Import a calendar file (.ics)</button>
+      <p class="muted small" style="margin:10px 2px 0">For Apple Calendar, Outlook or TripIt: export or share the event as an .ics file, then pick it here.</p></div>`);
 }
 
 // ---------- Sign-in & sync (Firebase, optional) ----------
@@ -1536,7 +1689,9 @@ function startSession(acc) {
   document.body.classList.add('authed'); render(); scheduleReminders(); refreshAll();
   if (pendingShare) { const p = pendingShare; pendingShare = null; receiveShare(p); }
   if (pendingCfg) { const c = pendingCfg; pendingCfg = null; setTimeout(() => applyCfgLink(c), 300); }
-  if (acc.mode === 'cloud') pull();
+  if (acc.mode === 'cloud') pull().then(() => syncAlerts(true));
+  showLock();
+  if (sessionStorage.getItem('contrail.gcal') && fb) { sessionStorage.removeItem('contrail.gcal'); fb.auth.getRedirectResult().then(r => { const t = r?.credential?.accessToken; if (t) { gcalToken = { t, exp: Date.now() + 50 * M }; importGoogleCalendar(t); } }).catch(() => {}); }
   if (isAdmin) loadMembers().then(ms => { const n = ms.filter(m => m.status === 'pending').length; if (n) toast(`${n} ${n > 1 ? 'people are' : 'person is'} waiting for approval — see Settings`, 4000); }).catch(() => {});
 }
 async function signOut() {
@@ -1634,11 +1789,25 @@ async function push() {
 }
 function schedulePush() { if (!user) return; clearTimeout(pushTimer); pushTimer = setTimeout(push, 1200); }
 
+// ---------- Page transitions ----------
+const reduceMotion = () => matchMedia('(prefers-reduced-motion: reduce)').matches;
+function goTab(next) {
+  if (next === tab) { scrollTo({ top: 0, behavior: 'smooth' }); return; }
+  const order = TABS.map(x => x[0]), dir = order.indexOf(next) > order.indexOf(tab) ? 1 : -1;
+  const swap = () => { tab = next; render(); scrollTo(0, 0); };
+  if (reduceMotion()) return swap();
+  document.documentElement.style.setProperty('--vtx', dir);
+  if (document.startViewTransition) { try { document.startViewTransition(swap); return; } catch (e) {} }
+  swap();
+  const el = document.body.classList.contains('home') ? $('#hsheet') : $('#main');
+  el?.animate([{ opacity: 0, transform: `translateX(${dir * 28}px)` }, { opacity: 1, transform: 'none' }], { duration: 320, easing: 'cubic-bezier(.2,.8,.2,1)' });
+}
+
 // ---------- Events ----------
 document.addEventListener('click', async e => {
   const t = e.target.closest('[data-tab],[data-sub],[data-year],[data-act],[data-open],[data-auth],[data-hero]'); if (!t) return;
   if (t.dataset.auth) { authMode = t.dataset.auth; renderAuth(); return; }
-  if (t.dataset.tab) { tab = t.dataset.tab; render(); scrollTo(0, 0); return; }
+  if (t.dataset.tab) { goTab(t.dataset.tab); return; }
   if (t.dataset.sub) { sub = t.dataset.sub; render(); return; }
   if (t.dataset.year) { statYear = t.dataset.year; render(); return; }
   if (t.dataset.open && t.dataset.open !== '' && !t.closest('.sheet')) { openFlight(t.dataset.open, t.dataset.src); return; }
@@ -1667,7 +1836,15 @@ document.addEventListener('click', async e => {
     case 'accept-share': acceptShare(false); break;
     case 'accept-mine': acceptShare(true); break;
     case 'copy-friend': window.__incoming = [S.friends.find(x => x.id === id)]; acceptShare(true); break;
-    case 'import-ics': $('#icsFile').click(); break;
+    case 'import-ics': openCalImport(); break;
+    case 'import-ics-file': $('#icsFile').click(); break;
+    case 'gcal': importGoogleCalendar(); break;
+    case 'alerts-on': enableAlerts(); break;
+    case 'alerts-off': disableAlerts(); break;
+    case 'lock-on': enableLock(); break;
+    case 'lock-off': disableLock(); break;
+    case 'unlock': unlock(); break;
+    case 'lock-out': $('#lock')?.remove(); signOut(); break;
     case 'ics-confirm': confirmIcs(); break;
     case 'export-ics': { const fl = live(S.flights); fl.length ? download('contrail-flights.ics', icsFor(fl), 'text/calendar') : toast('No flights to export'); break; }
     case 'ics-one': { const f = S[src].find(x => x.id === id); download(`${f.num}.ics`, icsFor([f]), 'text/calendar'); break; }
@@ -1713,6 +1890,9 @@ document.addEventListener('change', e => {
   if (e.target.id === 'e_from' || e.target.id === 'e_to') { e.target.value = e.target.value.toUpperCase(); if (e.target.id === 'e_from' && window.__lookup) scheduleAutoLookup(); }
   if (e.target.id === 'e_date') scheduleAutoLookup();
   if (e.target.id === 'af_otherdate' && e.target.value) { AF.date = e.target.value; afDates(); afUpdate(); }
+});
+document.addEventListener('change', e => {
+  if (e.target.id === 'pushLive' || e.target.id === 'pushFriends') { S.settings[e.target.id] = e.target.checked; save(false); syncAlerts(); }
 });
 $('#icsFile').addEventListener('change', async e => { const f = e.target.files[0]; if (f) importIcsText(await f.text()); e.target.value = ''; });
 $('#backupFile').addEventListener('change', async e => {
@@ -1798,6 +1978,8 @@ async function applyCfgLink(c) {
 function handleHash() {
   const k = location.hash.match(/^#(key|live)=(.+)$/);
   if (k) { history.replaceState(null, '', location.pathname + location.search); const c = { [k[1]]: decodeURIComponent(k[2]).trim() }; account ? applyCfgLink(c) : (pendingCfg = c, toast('Sign in to finish setup')); return; }
+  const o = location.hash.match(/^#open=([\w-]+)/);
+  if (o) { history.replaceState(null, '', location.pathname + location.search); if (account) { const src = S.flights.some(f => f.id === o[1]) ? 'flights' : 'friends'; if (S[src].some(f => f.id === o[1])) openFlight(o[1], src); } return; }
   const m = location.hash.match(/^#share=([\w-]+)/); if (m) { history.replaceState(null, '', location.pathname + location.search); account ? receiveShare(m[1]) : (pendingShare = m[1], toast('Sign in to see the shared flight')); } }
 window.addEventListener('hashchange', handleHash);
 (async () => {
@@ -1816,5 +1998,6 @@ setInterval(() => refreshAll(), 10 * M);
 document.body.classList.toggle('standalone', isStandalone());
 document.addEventListener('visibilitychange', () => { if (!document.hidden && account) { if (document.activeElement?.id !== 'quickNum') render(); refreshAll(); } });
 if ('serviceWorker' in navigator && location.protocol === 'https:') navigator.serviceWorker.register('sw.js', { updateViaCache: 'none' }).then(r => r.update()).catch(() => {});
-window.__contrail = { dayNightTile, subsolar, S, parseIcs, detectFlight, importIcsText, zonedToUtc, shareUrl, receiveShare };
+navigator.serviceWorker?.addEventListener('message', e => { if (e.data?.open && account) { location.hash = 'open=' + e.data.open; } });
+window.__contrail = { sealForServer, alertFlights, gEvent, goTab, dayNightTile, subsolar, S, parseIcs, detectFlight, importIcsText, zonedToUtc, shareUrl, receiveShare };
 })();

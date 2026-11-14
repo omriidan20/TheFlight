@@ -1,4 +1,4 @@
-const CACHE = 'contrail-v26';
+const CACHE = 'contrail-v27';
 const SHELL = ['./', 'index.html', 'app.js', 'airports.js', 'icon.svg', 'manifest.webmanifest', 'apple-touch-icon.png', 'icon-192.png', 'icon-512.png'];
 self.addEventListener('install', e => { e.waitUntil(caches.open(CACHE).then(c => c.addAll(SHELL))); self.skipWaiting(); });
 self.addEventListener('activate', e => { e.waitUntil(caches.keys().then(ks => Promise.all(ks.filter(k => k !== CACHE).map(k => caches.delete(k))))); self.clients.claim(); });
@@ -12,4 +12,16 @@ self.addEventListener('fetch', e => {
     e.respondWith(caches.match(e.request).then(r => r || fetch(e.request).then(res => { const c = res.clone(); caches.open(CACHE).then(x => x.put(e.request, c)); return res; })));
   }
 });
-self.addEventListener('notificationclick', e => { e.notification.close(); e.waitUntil(self.clients.matchAll({ type: 'window' }).then(cs => cs.length ? cs[0].focus() : self.clients.openWindow('./'))); });
+self.addEventListener('push', e => {
+  let n = {}; try { n = e.data ? e.data.json() : {}; } catch (x) { n = { title: 'Contrail', body: e.data && e.data.text() }; }
+  e.waitUntil(self.registration.showNotification(n.title || 'Contrail', { body: n.body || '', tag: n.tag || undefined, renotify: !!n.tag, icon: 'icon-192.png', badge: 'icon-192.png', data: { url: n.url || './' } }));
+});
+self.addEventListener('notificationclick', e => {
+  e.notification.close();
+  const url = new URL((e.notification.data && e.notification.data.url) || './', self.registration.scope).href;
+  const id = (url.match(/#open=([\w-]+)/) || [])[1];
+  e.waitUntil(self.clients.matchAll({ type: 'window', includeUncontrolled: true }).then(cs => {
+    if (cs.length) { const c = cs[0]; if (id) c.postMessage({ open: id }); return c.focus(); }
+    return self.clients.openWindow(url);
+  }));
+});

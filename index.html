@@ -349,6 +349,24 @@ body.home header{background:linear-gradient(180deg,rgba(2,4,10,.55),rgba(2,4,10,
 .mrow{display:flex;align-items:center;gap:10px;min-width:0}.mrow img,.avatar.sm{width:34px;height:34px;border-radius:50%;flex:none;font-size:13px;display:grid;place-items:center;color:#fff;font-weight:800}
 .mrow div{min-width:0}.mrow b{display:block;font-size:15px}.mrow span.muted{display:block;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:46vw}
 .mbtns{display:flex;gap:6px;flex:none}
+
+/* page transitions */
+header{view-transition-name:hdr}.dock{view-transition-name:dock}#globe{view-transition-name:globe}
+::view-transition-group(globe),::view-transition-group(dock){animation:none}
+::view-transition-old(globe),::view-transition-new(globe),::view-transition-old(dock),::view-transition-new(dock){animation:none}
+::view-transition-group(hdr){animation-duration:.25s}
+::view-transition-old(root){animation:vt-out .22s cubic-bezier(.4,0,1,1) both}
+::view-transition-new(root){animation:vt-in .34s cubic-bezier(.2,.8,.2,1) both}
+@keyframes vt-out{to{opacity:0;transform:translateX(calc(var(--vtx,1) * -26px)) scale(.985)}}
+@keyframes vt-in{from{opacity:0;transform:translateX(calc(var(--vtx,1) * 30px)) scale(.985)}}
+@media (prefers-reduced-motion:reduce){::view-transition-old(root),::view-transition-new(root){animation:none}}
+/* Face ID lock */
+#lock{position:fixed;inset:0;z-index:200;display:grid;place-items:center;background:rgba(6,9,18,.72);-webkit-backdrop-filter:blur(28px) saturate(120%);backdrop-filter:blur(28px) saturate(120%);animation:lockin .25s ease both}
+#lock.out{animation:lockout .25s ease both}
+#lock .lockbox{display:flex;flex-direction:column;align-items:center;gap:8px;width:min(320px,84vw);text-align:center}
+#lock img{width:72px;height:72px;border-radius:18px;margin-bottom:6px;box-shadow:0 10px 30px rgba(0,0,0,.4)}
+#lock b{font-size:20px}#lock .btn{margin-top:14px;width:100%}
+@keyframes lockin{from{opacity:0}}@keyframes lockout{to{opacity:0;transform:scale(1.04)}}
 </style>
 </head>
 <body>
@@ -361,8 +379,8 @@ body.home header{background:linear-gradient(180deg,rgba(2,4,10,.55),rgba(2,4,10,
 <div class="dock" id="dock"><nav class="tabs" id="tabs"></nav><button class="dock-search" id="dockSearch" aria-label="Add a flight"><svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><circle cx="10.5" cy="10.5" r="6.5"/><path d="m20 20-4.6-4.6"/></svg></button></div>
 <input type="file" id="icsFile" accept=".ics,text/calendar" hidden>
 <input type="file" id="backupFile" accept=".json,application/json" hidden>
-<script src="airports.js?v=26"></script>
+<script src="airports.js?v=27"></script>
 <script src="https://unpkg.com/maplibre-gl@5/dist/maplibre-gl.js" defer></script>
-<script src="app.js?v=26"></script>
+<script src="app.js?v=27"></script>
 </body>
 </html>
