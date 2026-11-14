@@ -311,7 +311,7 @@ function viewSettings() {
       <div class="actions" style="margin:0"><button class="btn pri sm" data-act="sys-save">Save for everyone</button><button class="btn sm" data-act="test-key">Test key</button></div>
       <p class="muted small" style="margin-bottom:0">Only you can see or change these. Every member uses them.</p></div>` : ''}
     <h2>Data</h2><div class="card"><div class="actions" style="margin:0"><button class="btn sm" data-act="backup">Download backup</button><button class="btn sm" data-act="restore">Restore backup</button><button class="btn sm danger" data-act="wipe">Delete all data</button></div></div>
-    <p class="muted small" style="text-align:center">Contrail · version 27</p>`;
+    <p class="muted small" style="text-align:center">Contrail · version 28</p>`;
 }
 
 // ---------- Sheets ----------
@@ -601,8 +601,8 @@ function viewFlights() {
   const list = up;
   let html = `<div class="listhd"><b>Upcoming</b>${past.length ? `<button class="link" data-tab="stats">${past.length} past flight${past.length > 1 ? 's' : ''} in Passport ›</button>` : ''}</div>`;
   if (!list.length) {
-    html += `<div class="empty"><p>No upcoming flights yet.</p>
-      <div class="actions" style="justify-content:center"><button class="btn pri" data-act="add">Add a flight</button><button class="btn" data-act="import-ics">Import from calendar</button></div></div>`;
+    html += `<div class="empty hempty"><p>No upcoming flights yet.</p>
+      <div class="actions" style="justify-content:center"><button class="btn pri sm" data-act="add">Add a flight</button><button class="btn sm" data-act="import-ics">Import from calendar</button></div></div>`;
   } else {
     html += `<div class="card list">${list.map(f => rowItem(f)).join('')}</div>`;
     html += `<div class="actions"><button class="btn sm" data-act="import-ics">📅 Import from calendar</button>${SYS.adbKey ? '<button class="btn sm" data-act="refresh-all">↻ Refresh live data</button>' : ''}</div>`;
@@ -611,18 +611,22 @@ function viewFlights() {
 }
 let homeSnap = 1, homeVis = innerHeight * 0.55;
 let sheetTab = null;
+let homeDrag = null;
 function renderHome(m, view) {
   let sh = $('#hsheet');
   if (!sh) {
     m.innerHTML = `<div class="hsheet" id="hsheet"><div class="hgrab"><div class="grabber"></div></div><div class="hscroll" id="hscroll"></div></div>`;
     sh = $('#hsheet');
     const dockH = () => ($('#dock')?.offsetHeight || 80) + 24;
-    sheetDrag({ sheet: sh, scroll: $('#hscroll'), grab: sh.querySelector('.hgrab'), start: homeSnap,
-      snaps: () => [0, Math.max(0, sh.offsetHeight - innerHeight * 0.55), Math.max(0, sh.offsetHeight - dockH() - 150)],
+    // collapsed height: enough to show the header and, when empty, the whole empty state with its buttons
+    const peek = () => { const e = sh.querySelector('.hempty .actions'); return e ? Math.min(320, Math.max(150, e.getBoundingClientRect().bottom - sh.getBoundingClientRect().top + 16)) : 150; };
+    homeDrag = sheetDrag({ sheet: sh, scroll: $('#hscroll'), grab: sh.querySelector('.hgrab'), start: homeSnap,
+      snaps: () => [0, Math.max(0, sh.offsetHeight - innerHeight * 0.55), Math.max(0, sh.offsetHeight - dockH() - peek())],
       onSnap: (vis, idx) => { homeSnap = idx < 0 ? homeSnap : idx; homeVis = vis; if (homeGlobe) { homeGlobe._key = ''; updateHomeGlobe(true); } } });
   }
-  const sc = $('#hscroll'); sc.innerHTML = view();
+  const sc = $('#hscroll'), wasEmpty = !!sc.querySelector('.hempty'); sc.innerHTML = view();
   if (sheetTab !== tab) { sc.scrollTop = 0; sheetTab = tab; }
+  if (homeDrag && homeSnap === 2 && (wasEmpty || sc.querySelector('.hempty'))) homeDrag.settle(2);
 }
 const dayDiff = f => { const a = localDate(arrT(f), f.to?.tz), d = localDate(depT(f), f.from?.tz); return Math.round((Date.parse(a) - Date.parse(d)) / 864e5); };
 const cityOf = a => esc(a?.city || a?.name || a?.iata || '???');
