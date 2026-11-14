@@ -46,7 +46,7 @@ button,input,select,textarea{font:inherit;color:inherit;letter-spacing:inherit}
 
 body:not(.authed) header,body:not(.authed) .dock{display:none}
 header{position:sticky;top:0;z-index:20;padding:calc(env(safe-area-inset-top) + 10px) 18px 10px;
-  background:linear-gradient(180deg,rgba(7,10,20,.85) 60%,rgba(7,10,20,0))}
+  background:linear-gradient(180deg,rgba(7,10,20,.96) 62%,rgba(7,10,20,0))}
 .hdr{display:flex;align-items:center;gap:10px;max-width:720px;margin:0 auto}
 .hdr h1{flex:1;margin:0;font-size:34px;font-weight:800;letter-spacing:-.03em}
 main{padding:6px 16px calc(120px + env(safe-area-inset-bottom));max-width:720px;margin:0 auto}
@@ -307,8 +307,8 @@ body.home .maplibregl-ctrl-bottom-right{bottom:auto;top:calc(52px + env(safe-are
 /* v14: dock, full-height home sheet, clean header over the globe */
 .dock{position:fixed;z-index:30;left:0;right:0;bottom:calc(12px + env(safe-area-inset-bottom));display:flex;justify-content:center;align-items:center;gap:10px;padding:0 12px;pointer-events:none}
 .dock>*{pointer-events:auto}
-nav.tabs{width:auto}
-.dock-search{flex:none;width:64px;height:64px;border-radius:50%;display:grid;place-items:center;cursor:pointer;color:var(--text);background:rgba(255,255,255,.09);-webkit-backdrop-filter:var(--blur);backdrop-filter:var(--blur);border:1px solid var(--stroke);box-shadow:var(--shadow);transition:transform .15s}
+nav.tabs{width:auto;background:rgba(16,20,34,.84)!important;-webkit-backdrop-filter:blur(26px) saturate(140%);backdrop-filter:blur(26px) saturate(140%)}
+.dock-search{flex:none;width:64px;height:64px;border-radius:50%;display:grid;place-items:center;cursor:pointer;color:var(--text);background:rgba(16,20,34,.84);-webkit-backdrop-filter:var(--blur);backdrop-filter:var(--blur);border:1px solid var(--stroke);box-shadow:var(--shadow);transition:transform .15s}
 .dock-search:active{transform:scale(.93)}
 html{height:100%}
 body{min-height:100%}
@@ -351,16 +351,9 @@ body.home header{background:linear-gradient(180deg,rgba(2,4,10,.55),rgba(2,4,10,
 .mrow div{min-width:0}.mrow b{display:block;font-size:15px}.mrow span.muted{display:block;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:46vw}
 .mbtns{display:flex;gap:6px;flex:none}
 
-/* page transitions */
-header{view-transition-name:hdr}.dock{view-transition-name:dock}#globe{view-transition-name:globe}
-::view-transition-group(globe),::view-transition-group(dock){animation:none}
-::view-transition-old(globe),::view-transition-new(globe),::view-transition-old(dock),::view-transition-new(dock){animation:none}
-::view-transition-group(hdr){animation-duration:.25s}
-::view-transition-old(root){animation:vt-out .22s cubic-bezier(.4,0,1,1) both}
-::view-transition-new(root){animation:vt-in .34s cubic-bezier(.2,.8,.2,1) both}
-@keyframes vt-out{to{opacity:0;transform:translateX(calc(var(--vtx,1) * -26px)) scale(.985)}}
-@keyframes vt-in{from{opacity:0;transform:translateX(calc(var(--vtx,1) * 30px)) scale(.985)}}
-@media (prefers-reduced-motion:reduce){::view-transition-old(root),::view-transition-new(root){animation:none}}
+/* soft fade behind the tab bar so content never shows through it */
+body.authed::after{content:"";position:fixed;left:0;right:0;bottom:0;height:calc(118px + env(safe-area-inset-bottom));z-index:25;pointer-events:none;
+  background:linear-gradient(180deg,rgba(6,8,16,0) 0%,rgba(6,8,16,.78) 45%,rgba(6,8,16,.94) 100%)}
 /* Face ID lock */
 #lock{position:fixed;inset:0;z-index:200;display:grid;place-items:center;background:rgba(6,9,18,.72);-webkit-backdrop-filter:blur(28px) saturate(120%);backdrop-filter:blur(28px) saturate(120%);animation:lockin .25s ease both}
 #lock.out{animation:lockout .25s ease both}
@@ -380,8 +373,8 @@ header{view-transition-name:hdr}.dock{view-transition-name:dock}#globe{view-tran
 <div class="dock" id="dock"><nav class="tabs" id="tabs"></nav><button class="dock-search" id="dockSearch" aria-label="Add a flight"><svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><circle cx="10.5" cy="10.5" r="6.5"/><path d="m20 20-4.6-4.6"/></svg></button></div>
 <input type="file" id="icsFile" accept=".ics,text/calendar" hidden>
 <input type="file" id="backupFile" accept=".json,application/json" hidden>
-<script src="airports.js?v=28"></script>
+<script src="airports.js?v=29"></script>
 <script src="https://unpkg.com/maplibre-gl@5/dist/maplibre-gl.js" defer></script>
-<script src="app.js?v=28"></script>
+<script src="app.js?v=29"></script>
 </body>
 </html>

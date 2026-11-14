@@ -311,7 +311,7 @@ function viewSettings() {
       <div class="actions" style="margin:0"><button class="btn pri sm" data-act="sys-save">Save for everyone</button><button class="btn sm" data-act="test-key">Test key</button></div>
       <p class="muted small" style="margin-bottom:0">Only you can see or change these. Every member uses them.</p></div>` : ''}
     <h2>Data</h2><div class="card"><div class="actions" style="margin:0"><button class="btn sm" data-act="backup">Download backup</button><button class="btn sm" data-act="restore">Restore backup</button><button class="btn sm danger" data-act="wipe">Delete all data</button></div></div>
-    <p class="muted small" style="text-align:center">Contrail · version 28</p>`;
+    <p class="muted small" style="text-align:center">Contrail · version 29</p>`;
 }
 
 // ---------- Sheets ----------
@@ -1798,13 +1798,14 @@ const reduceMotion = () => matchMedia('(prefers-reduced-motion: reduce)').matche
 function goTab(next) {
   if (next === tab) { scrollTo({ top: 0, behavior: 'smooth' }); return; }
   const order = TABS.map(x => x[0]), dir = order.indexOf(next) > order.indexOf(tab) ? 1 : -1;
-  const swap = () => { tab = next; render(); scrollTo(0, 0); };
-  if (reduceMotion()) return swap();
-  document.documentElement.style.setProperty('--vtx', dir);
-  if (document.startViewTransition) { try { document.startViewTransition(swap); return; } catch (e) {} }
-  swap();
-  const el = document.body.classList.contains('home') ? $('#hsheet') : $('#main');
-  el?.animate([{ opacity: 0, transform: `translateX(${dir * 28}px)` }, { opacity: 1, transform: 'none' }], { duration: 320, easing: 'cubic-bezier(.2,.8,.2,1)' });
+  tab = next; render(); scrollTo(0, 0);
+  if (reduceMotion()) return;
+  const home = document.body.classList.contains('home');
+  const el = home ? $('#hscroll') : $('#main');
+  const fx = { duration: 340, easing: 'cubic-bezier(.2,.8,.2,1)' };
+  el?.animate([{ opacity: 0, transform: `translateX(${dir * 36}px)` }, { opacity: 1, transform: 'none' }], fx);
+  if (home) $('#globe')?.animate([{ opacity: .35 }, { opacity: 1 }], { duration: 420, easing: 'ease-out' });
+  $('#title')?.animate([{ opacity: 0, transform: `translateX(${dir * 14}px)` }, { opacity: 1, transform: 'none' }], fx);
 }
 
 // ---------- Events ----------
