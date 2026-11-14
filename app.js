@@ -18,6 +18,9 @@ const H = 3600e3, M = 60e3;
 const readJSON = (k, d) => { try { return JSON.parse(localStorage.getItem(k)) ?? d; } catch (e) { return d; } };
 const CFG = readJSON(CFG_KEY, {});
 (() => { const old = readJSON(LEGACY_KEY, null); if (old?.settings?.fbConfig && !CFG.fbConfig) { CFG.fbConfig = old.settings.fbConfig; localStorage.setItem(CFG_KEY, JSON.stringify(CFG)); } })();
+// Built-in sync server (Firebase web config is public by design; access is protected by Auth + Firestore rules)
+const BUILTIN_FB = { apiKey: 'AIzaSyADdMj7l07qZaNNRkd-XnGY6BDpywmBCdI', authDomain: 'theflight-fb02e.firebaseapp.com', projectId: 'theflight-fb02e', storageBucket: 'theflight-fb02e.firebasestorage.app', messagingSenderId: '348811031034', appId: '1:348811031034:web:839a649e8ad9b2ad49f443' };
+const fbCfgText = () => CFG.fbConfig || JSON.stringify(BUILTIN_FB);
 const saveCfg = () => localStorage.setItem(CFG_KEY, JSON.stringify(CFG));
 const dataKey = () => 'contrail.data.' + account.username.toLowerCase();
 
@@ -270,8 +273,8 @@ function computeStats(year) {
 function viewSettings() {
   const st = S.settings;
   const acct = `<div style="display:flex;gap:14px;align-items:center"><div class="avatar lg" style="${avatarStyle(account.username)}">${esc(initials(account.username))}</div>
-      <div style="flex:1;min-width:0"><b style="font-size:18px">${esc(account.username)}</b><div class="muted small">${account.mode === 'cloud' ? '☁︎ Synced account' : 'Account on this device'}</div></div></div>
-    <div class="actions" style="margin-bottom:0"><button class="btn sm" data-act="change-pw">Change password</button><button class="btn sm" data-act="signout">Sign out</button><button class="btn sm danger" data-act="delete-account">Delete account</button></div>`;
+      <div style="flex:1;min-width:0"><b style="font-size:18px">${esc(account.username)}</b><div class="muted small">${account.mode === 'cloud' ? (account.google ? '☁︎ Google account · synced' : '☁︎ Synced account') : 'Account on this device'}</div></div></div>
+    <div class="actions" style="margin-bottom:0">${account.google ? '' : '<button class="btn sm" data-act="change-pw">Change password</button>'}<button class="btn sm" data-act="signout">Sign out</button><button class="btn sm danger" data-act="delete-account">Delete account</button></div>`;
   return `<h2>Account</h2><div class="card">${acct}</div>
     <h2>Profile</h2><div class="card"><label class="f"><span>Your name (shown when you share flights)</span><input id="setName" value="${esc(st.name)}" placeholder="e.g. Omri"></label>
       <label class="f" style="margin:0"><span>Distance units</span><select id="setUnits"><option value="mi" ${st.units === 'mi' ? 'selected' : ''}>Miles</option><option value="km" ${st.units === 'km' ? 'selected' : ''}>Kilometers</option></select></label></div>
@@ -868,7 +871,7 @@ function parseConfig(txt) {
 const loadScript = src => new Promise((res, rej) => { const s = document.createElement('script'); s.src = src; s.onload = res; s.onerror = rej; document.head.appendChild(s); });
 let fbReady = null;
 function initFirebase() {
-  const cfg = parseConfig(CFG.fbConfig); if (!cfg || !cfg.apiKey) return Promise.resolve(false);
+  const cfg = parseConfig(fbCfgText()); if (!cfg || !cfg.apiKey) return Promise.resolve(false);
   return fbReady ||= (async () => {
     try {
       const base = 'https://www.gstatic.com/firebasejs/10.12.2/';
@@ -877,7 +880,7 @@ function initFirebase() {
       fb = { auth: app.auth(), db: app.firestore() };
       await new Promise(res => { let first = true; fb.auth.onAuthStateChanged(u => {
         user = u;
-        if (u && (!account || account.uid !== u.uid)) startSession({ username: u.displayName || u.email.split('@')[0], mode: 'cloud', uid: u.uid });
+        if (u && (!account || account.uid !== u.uid)) startSession({ username: u.displayName || (u.email || 'traveler').split('@')[0], mode: 'cloud', uid: u.uid, google: u.providerData.some(p => p.providerId === 'google.com') });
         else if (!u && account?.mode === 'cloud') { account = null; render(); }
         if (first) { first = false; res(); }
       }); });
@@ -915,10 +918,29 @@ async function signUp(username, pw) {
   if (legacy && Object.keys(users).length === 1) { localStorage.setItem('contrail.data.' + key, JSON.stringify({ flights: legacy.flights || [], friends: legacy.friends || [], settings: { ...legacy.settings, fbConfig: undefined } })); localStorage.removeItem(LEGACY_KEY); }
   startSession({ username, mode: 'local' });
 }
+async function signInGoogle() {
+  const err = $('#authErr'); if (err) err.textContent = '';
+  if (!(await initFirebase())) { if (err) err.textContent = 'Can’t reach the sync server — check your connection'; return; }
+  const prov = new firebase.auth.GoogleAuthProvider(); prov.setCustomParameters({ prompt: 'select_account' });
+  try { await fb.auth.signInWithPopup(prov); }
+  catch (e) {
+    if (/popup-blocked|operation-not-supported|web-storage-unsupported/.test(e.code || '')) return fb.auth.signInWithRedirect(prov);
+    if (/popup-closed|cancelled-popup/.test(e.code || '')) return;
+    const msg = e.code === 'auth/operation-not-allowed' ? 'Google sign-in isn’t enabled yet in Firebase' : e.code === 'auth/unauthorized-domain' ? 'Add this site to Firebase → Authentication → Authorized domains' : fbErr(e);
+    if (err) err.textContent = msg; else toast(msg);
+  }
+}
 async function signInPw(username, pw) {
   if (await initFirebase()) {
     try { await fb.auth.signInWithEmailAndPassword(toEmail(username), pw); return; }
-    catch (e) { throw new Error(fbErr(e)); }
+    catch (e) {
+      const loc = getUsers()[username.toLowerCase()];
+      if (loc && /invalid-credential|user-not-found|wrong-password/.test(e.code || '') && await hashPw(pw, loc.salt, loc.iter) === loc.hash) {
+        try { const c = await fb.auth.createUserWithEmailAndPassword(toEmail(username), pw); await c.user.updateProfile({ displayName: loc.username }); startSession({ username: loc.username, mode: 'cloud', uid: c.user.uid }); toast('Your account now syncs across devices'); return; }
+        catch (e2) { throw new Error(fbErr(e2)); }
+      }
+      throw new Error(fbErr(e));
+    }
   }
   const u = getUsers()[username.toLowerCase()];
   if (!u || await hashPw(pw, u.salt, u.iter) !== u.hash) throw new Error('Wrong username or password');
@@ -941,7 +963,7 @@ async function signOut() {
 let authMode = 'signin';
 function renderAuth() {
   document.body.classList.remove('authed'); closeSheet();
-  const cloud = !!parseConfig(CFG.fbConfig);
+  const cloud = !!parseConfig(fbCfgText());
   const isUp = authMode === 'signup';
   $('#main').innerHTML = `<div class="auth"><div class="auth-card">
     <img class="auth-logo" src="icon.svg" alt="">
@@ -954,7 +976,8 @@ function renderAuth() {
       <div class="err" id="authErr"></div>
       <button class="btn pri block" type="submit" id="authBtn">${isUp ? 'Create account' : 'Sign in'}</button>
     </form>
-    <p class="muted small" style="text-align:center;margin:16px 0 0">${cloud ? '☁︎ Accounts sync across your devices.' : 'Your account and flights are stored on this device.'}<br><a href="#" data-act="sync-server">${cloud ? 'Sync server settings' : 'Sync across devices…'}</a></p>
+    ${cloud ? `<div class="or"><span>or</span></div><button class="btn block gbtn" data-act="google"><svg width="18" height="18" viewBox="0 0 48 48"><path fill="#FFC107" d="M43.6 20.5H42V20H24v8h11.3C33.7 32.7 29.2 36 24 36c-6.6 0-12-5.4-12-12s5.4-12 12-12c3.1 0 5.8 1.2 7.9 3.1l5.7-5.7C34 6.1 29.3 4 24 4 12.9 4 4 12.9 4 24s8.9 20 20 20 20-8.9 20-20c0-1.3-.1-2.4-.4-3.5z"/><path fill="#FF3D00" d="m6.3 14.7 6.6 4.8C14.7 15.1 19 12 24 12c3.1 0 5.8 1.2 7.9 3.1l5.7-5.7C34 6.1 29.3 4 24 4 16.3 4 9.7 8.3 6.3 14.7z"/><path fill="#4CAF50" d="M24 44c5.2 0 9.9-2 13.4-5.2l-6.2-5.2C29.2 35.1 26.7 36 24 36c-5.2 0-9.6-3.3-11.3-8l-6.5 5C9.5 39.6 16.2 44 24 44z"/><path fill="#1976D2" d="M43.6 20.5H42V20H24v8h11.3c-.8 2.2-2.2 4.2-4.1 5.6l6.2 5.2C37 39.2 44 34 44 24c0-1.3-.1-2.4-.4-3.5z"/></svg>Continue with Google</button>` : ''}
+    <p class="muted small" style="text-align:center;margin:16px 0 0">${cloud ? '☁︎ Sign in on any device — your flights sync.' : 'Your account and flights are stored on this device.'}</p>
   </div></div>`;
   setTimeout(() => $('#a_user')?.focus(), 50);
 }
@@ -969,7 +992,7 @@ document.addEventListener('submit', async e => {
   catch (x) { err.textContent = x.message; btn.disabled = false; btn.textContent = label; }
 });
 function syncServerHtml() {
-  return `<p class="muted small" style="margin-top:0">By default, accounts live on one device. To sign in from any device, connect a free Firebase project — then usernames and flights sync everywhere.</p>
+  return `<p class="muted small" style="margin-top:0">${CFG.fbConfig ? 'Using a custom sync server.' : `Connected to <b>${esc(BUILTIN_FB.projectId)}</b>. Flights sync to every device you sign in on.`} Only change this if you want your own server.</p>
     <label class="f"><span>Firebase web config</span><textarea id="setFb" rows="5" placeholder='{ "apiKey": "...", "authDomain": "...", "projectId": "...", "appId": "..." }'>${esc(CFG.fbConfig || '')}</textarea></label>
     <button class="btn sm" data-act="save-fb">Save</button>
     <details class="small muted" style="margin-top:12px"><summary>How to set this up (5 min)</summary><ol style="padding-left:18px">
@@ -984,6 +1007,7 @@ async function changePassword() {
   const nw = prompt('New password (6+ characters):'); if (!nw) return;
   if (nw.length < 6) return toast('Password must be at least 6 characters');
   try {
+    if (account.google) return toast('You sign in with Google — manage your password in your Google account');
     if (account.mode === 'cloud') {
       const cred = firebase.auth.EmailAuthProvider.credential(user.email, cur);
       await user.reauthenticateWithCredential(cred); await user.updatePassword(nw);
@@ -997,10 +1021,11 @@ async function changePassword() {
 }
 async function deleteAccount() {
   if (!confirm(`Delete the account “${account.username}” and all its flights? This can’t be undone.`)) return;
-  const pw = prompt('Enter your password to confirm:'); if (pw == null) return;
+  const pw = account.google ? '' : prompt('Enter your password to confirm:'); if (pw == null) return;
   try {
     if (account.mode === 'cloud') {
-      await user.reauthenticateWithCredential(firebase.auth.EmailAuthProvider.credential(user.email, pw));
+      if (account.google) await user.reauthenticateWithPopup(new firebase.auth.GoogleAuthProvider());
+      else await user.reauthenticateWithCredential(firebase.auth.EmailAuthProvider.credential(user.email, pw));
       await fb.db.collection('users').doc(user.uid).delete(); await user.delete();
     } else {
       const users = getUsers(), key = account.username.toLowerCase(), u = users[key];
@@ -1082,6 +1107,7 @@ document.addEventListener('click', async e => {
     case 'sync-server': e.preventDefault(); sheet(`${sheetHd('Sync server')}${syncServerHtml()}`); break;
     case 'toggle-pw': { const i = $('#a_pw'); i.type = i.type === 'password' ? 'text' : 'password'; t.textContent = i.type === 'password' ? 'Show' : 'Hide'; break; }
     case 'signout': await signOut(); toast('Signed out'); break;
+    case 'google': signInGoogle(); break;
     case 'change-pw': changePassword(); break;
     case 'delete-account': deleteAccount(); break;
     case 'smart-paste': smartPaste(); break;
@@ -1131,8 +1157,12 @@ function handleHash() { const m = location.hash.match(/^#share=([\w-]+)/); if (m
 window.addEventListener('hashchange', handleHash);
 (async () => {
   const sess = localStorage.getItem(SESSION_KEY), local = sess && getUsers()[sess];
-  if (local) startSession({ username: local.username, mode: 'local' });
-  else if (CFG.fbConfig) { $('#main').innerHTML = '<div class="auth"><p class="muted">Loading…</p></div>'; await initFirebase(); if (!account) renderAuth(); }
+  if (local && !parseConfig(fbCfgText())) startSession({ username: local.username, mode: 'local' });
+  else if (parseConfig(fbCfgText())) {
+    $('#main').innerHTML = '<div class="auth"><p class="muted">Loading…</p></div>';
+    const ok = await initFirebase();
+    if (!account) { if (!ok && local) startSession({ username: local.username, mode: 'local' }); else renderAuth(); }
+  }
   else renderAuth();
   handleHash();
 })();
