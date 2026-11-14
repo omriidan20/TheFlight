@@ -240,7 +240,8 @@ function render() {
   const av = $('#hdrAvatar'); av.textContent = initials(account.username); av.setAttribute('style', avatarStyle(account.username));
   const m = $('#main');
   document.body.classList.toggle('home', tab === 'flights');
-  if (tab === 'flights') { m.innerHTML = viewFlights(); updateHomeGlobe(); }
+  if (tab !== 'flights') $('#hsheet')?.remove();
+  if (tab === 'flights') { renderHome(m); updateHomeGlobe(); }
   else if (tab === 'friends') m.innerHTML = viewFriends();
   else if (tab === 'stats') { m.innerHTML = viewStats(); drawWorldMap(); }
   else m.innerHTML = viewSettings();
@@ -300,7 +301,7 @@ function viewSettings() {
       <p class="muted small" style="margin:0">${liveProxy() ? '✓ Using your OpenSky server.' : 'Leave empty unless live position doesn’t show up.'}</p></div>
     <h2>Sync server</h2><div class="card">${syncServerHtml()}</div>
     <h2>Data</h2><div class="card"><div class="actions" style="margin:0"><button class="btn sm" data-act="backup">Download backup</button><button class="btn sm" data-act="restore">Restore backup</button><button class="btn sm danger" data-act="wipe">Delete all data</button></div></div>
-    <p class="muted small" style="text-align:center">Contrail · version 13</p>`;
+    <p class="muted small" style="text-align:center">Contrail · version 14</p>`;
 }
 
 // ---------- Sheets ----------
@@ -468,7 +469,7 @@ function updateHomeGlobe() {
     if (focus && phase(focus).key === 'air' && !liveFresh(focus)) fetchLivePos(focus).then(ok => { if (ok) { save(false); homeGlobe._key = ''; updateHomeGlobe(); } });
     const key = JSON.stringify([innerWidth, innerHeight, ...up.map(f => [f.id, f.from?.iata, f.to?.iata, Math.round(phase(f).p * 50), f.livePos?.t || 0])]);
     if (homeGlobe._key === key) return; homeGlobe._key = key;
-    showRoutes(homeGlobe, focus ? up : live(S.flights), focus, { fitAll: true, padTop: 90, padBottom: innerHeight * 0.56 });
+    showRoutes(homeGlobe, focus ? up : live(S.flights), focus, { fitAll: true, padTop: 90, padBottom: homeVis });
   } catch (e) { console.warn(e); }
 }
 let worldMap = null;
@@ -484,8 +485,7 @@ function viewFlights() {
   const up = all.filter(f => arrT(f) > now - 6 * H).sort((a, b) => depT(a) - depT(b));
   const past = all.filter(f => arrT(f) <= now - 6 * H).sort((a, b) => depT(b) - depT(a));
   const list = up;
-  let html = `<div class="homepanel"><button class="quick" data-act="add"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" style="opacity:.6;flex:none"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg><span class="sp muted">Add a flight — LY8, Delta 100…</span><span class="plus">+</span></button>`;
-  html += `<div class="listhd"><b>Upcoming</b>${past.length ? `<button class="link" data-tab="stats">${past.length} past flight${past.length > 1 ? 's' : ''} in Passport ›</button>` : ''}</div>`;
+  let html = `<div class="listhd"><b>Upcoming</b>${past.length ? `<button class="link" data-tab="stats">${past.length} past flight${past.length > 1 ? 's' : ''} in Passport ›</button>` : ''}</div>`;
   if (!list.length) {
     html += `<div class="empty"><p>No upcoming flights yet.</p>
       <div class="actions" style="justify-content:center"><button class="btn pri" data-act="add">Add a flight</button><button class="btn" data-act="import-ics">Import from calendar</button></div></div>`;
@@ -493,7 +493,20 @@ function viewFlights() {
     html += `<div class="card list">${list.map(f => rowItem(f)).join('')}</div>`;
     html += `<div class="actions"><button class="btn sm" data-act="import-ics">📅 Import from calendar</button>${S.settings.apiKey ? '<button class="btn sm" data-act="refresh-all">↻ Refresh live data</button>' : ''}</div>`;
   }
-  return html + '</div>';
+  return html;
+}
+let homeSnap = 1, homeVis = innerHeight * 0.55;
+function renderHome(m) {
+  let sh = $('#hsheet');
+  if (!sh) {
+    m.innerHTML = `<div class="hsheet" id="hsheet"><div class="hgrab"><div class="grabber"></div></div><div class="hscroll" id="hscroll"></div></div>`;
+    sh = $('#hsheet');
+    const dockH = () => ($('#dock')?.offsetHeight || 80) + 24;
+    sheetDrag({ sheet: sh, scroll: $('#hscroll'), grab: sh.querySelector('.hgrab'), start: homeSnap,
+      snaps: () => [0, Math.max(0, sh.offsetHeight - innerHeight * 0.55), Math.max(0, sh.offsetHeight - dockH() - 150)],
+      onSnap: (vis, idx) => { homeSnap = idx < 0 ? homeSnap : idx; homeVis = vis; if (homeGlobe?._focus) { const f = S.flights.find(x => x.id === homeGlobe._focus); if (f) { homeGlobe.easeTo({ ...routeCam(homeGlobe, f, 90, vis), duration: 420 }); setTimeout(() => placePins(homeGlobe, f), 440); } } } });
+  }
+  $('#hscroll').innerHTML = viewFlights();
 }
 const dayDiff = f => { const a = localDate(arrT(f), f.to?.tz), d = localDate(depT(f), f.from?.tz); return Math.round((Date.parse(a) - Date.parse(d)) / 864e5); };
 const cityOf = a => esc(a?.city || a?.name || a?.iata || '???');
@@ -595,28 +608,50 @@ function openFlight(id, src = 'flights') {
     el._liveTimer = setInterval(tick, 30000); setTimeout(tick, 600);
   }
 }
-function attachDrag(view, onSnap) {
-  const sh = view.querySelector('.dsheet'), sc = view.querySelector('.dscroll'), gz = view.querySelector('.grabzone');
-  const SH = () => sh.offsetHeight, snaps = () => [0, Math.max(0, SH() - innerHeight * 0.58), SH() - gz.offsetHeight - 8];
-  let y = snaps()[1], startY = 0, startT = 0, dragging = false, lastY = 0, lastT = 0, v = 0;
-  const apply = () => { sh.style.transform = `translateY(${y}px)`; };
-  sh.style.transition = 'none'; apply(); view._vis = SH() - y; requestAnimationFrame(() => { sh.style.transition = ''; });
-  const begin = cy => { dragging = true; startY = cy; startT = y; lastY = cy; lastT = performance.now(); v = 0; sh.style.transition = 'none'; };
-  const move = cy => { const t = performance.now(); v = (cy - lastY) / Math.max(1, t - lastT); lastY = cy; lastT = t; const max = snaps()[2]; let ny = startT + cy - startY; if (ny < 0) ny = ny / 3; if (ny > max) ny = max + (ny - max) / 3; y = ny; apply(); };
-  const settle = target => { y = target; sh.style.transition = ''; apply(); sc.style.overflowY = target === snaps()[2] ? 'hidden' : ''; onSnap(SH() - y); };
+function sheetDrag({ sheet, scroll, grab, snaps, start = 1, onSnap }) {
+  let y = snaps()[start], dragging = false, startY = 0, startT = 0, lastY = 0, lastT = 0, v = 0, decided = false, tY = 0, tX = 0;
+  const apply = () => { sheet.style.transform = `translateY(${y}px)`; };
+  const lo = () => snaps()[0], hi = () => snaps()[snaps().length - 1];
+  sheet.style.transition = 'none'; apply(); requestAnimationFrame(() => { sheet.style.transition = ''; });
+  const begin = cy => { dragging = true; startY = cy; startT = y; lastY = cy; lastT = performance.now(); v = 0; sheet.style.transition = 'none'; };
+  const move = cy => { const t = performance.now(); v = (cy - lastY) / Math.max(1, t - lastT); lastY = cy; lastT = t; let ny = startT + cy - startY; if (ny < lo()) ny = lo() + (ny - lo()) / 3; if (ny > hi()) ny = hi() + (ny - hi()) / 3; y = ny; apply(); };
+  const settle = target => { y = target; sheet.style.transition = ''; apply(); if (scroll) scroll.style.overflowY = target <= lo() + 1 ? 'auto' : 'hidden'; onSnap && onSnap(sheet.offsetHeight - y, snaps().indexOf(target)); };
   const end = () => {
-    dragging = false; const s = snaps();
-    let target = v > 0.45 ? (s.find(p => p > y + 4) ?? s[2]) : v < -0.45 ? ([...s].reverse().find(p => p < y - 4) ?? 0) : s.reduce((a, b) => Math.abs(b - y) < Math.abs(a - y) ? b : a);
+    dragging = false; const sn = snaps();
+    const target = v > 0.4 ? (sn.find(p => p > y + 4) ?? hi()) : v < -0.4 ? ([...sn].reverse().find(p => p < y - 4) ?? lo()) : sn.reduce((a, b) => Math.abs(b - y) < Math.abs(a - y) ? b : a);
     settle(target);
   };
-  gz.addEventListener('pointerdown', e => { if (e.target.closest('button')) return; begin(e.clientY); try { gz.setPointerCapture(e.pointerId); } catch (x) {} });
-  gz.addEventListener('pointermove', e => { if (dragging) move(e.clientY); });
-  ['pointerup', 'pointercancel'].forEach(t => gz.addEventListener(t, e => { if (!dragging) return; const moved = Math.abs(e.clientY - startY) > 6; if (moved) end(); else { dragging = false; const s = snaps(); settle(y >= s[2] - 2 ? s[1] : s[2]); } }));
-  let ty = null;
-  sc.addEventListener('touchstart', e => { ty = e.touches[0].clientY; }, { passive: true });
-  sc.addEventListener('touchmove', e => { const cy = e.touches[0].clientY; if (!dragging && sc.scrollTop <= 0 && cy - ty > 6) begin(ty); if (dragging) { e.preventDefault(); move(cy); } }, { passive: false });
-  sc.addEventListener('touchend', () => { if (dragging) end(); });
-  addEventListener('resize', () => { if (!view.isConnected) return; settle(snaps()[1]); });
+  const toggle = () => { const sn = snaps(), idx = sn.indexOf(sn.reduce((a, b) => Math.abs(b - y) < Math.abs(a - y) ? b : a)); settle(sn[idx === sn.length - 1 ? 1 : sn.length - 1]); };
+  // Touch: drag from any point. Swipe up expands until the sheet is fully open, then the list scrolls;
+  // swipe down collapses when the list is scrolled to the top.
+  sheet.addEventListener('touchstart', e => { if (e.target.closest('input,textarea,select')) return; tY = e.touches[0].clientY; tX = e.touches[0].clientX; decided = false; }, { passive: true });
+  sheet.addEventListener('touchmove', e => {
+    const cy = e.touches[0].clientY, dy = cy - tY, dx = e.touches[0].clientX - tX;
+    if (!dragging && !decided) {
+      if (Math.abs(dy) < 6 && Math.abs(dx) < 6) return;
+      decided = true;
+      if (Math.abs(dx) > Math.abs(dy)) return;
+      const inScroll = scroll && scroll.contains(e.target), atTop = !scroll || scroll.scrollTop <= 0;
+      if (!inScroll || (dy > 0 && atTop) || (dy < 0 && y > lo() + 1)) begin(tY);
+    }
+    if (dragging) { e.preventDefault(); move(cy); }
+  }, { passive: false });
+  sheet.addEventListener('touchend', e => { if (dragging) end(); else if (!decided && grab && grab.contains(e.target) && !e.target.closest('button')) toggle(); });
+  // Mouse: drag the handle area
+  if (grab) {
+    grab.addEventListener('pointerdown', e => { if (e.pointerType !== 'mouse' || e.target.closest('button')) return; begin(e.clientY); try { grab.setPointerCapture(e.pointerId); } catch (x) {} });
+    grab.addEventListener('pointermove', e => { if (dragging && e.pointerType === 'mouse') move(e.clientY); });
+    ['pointerup', 'pointercancel'].forEach(t => grab.addEventListener(t, e => { if (!dragging || e.pointerType !== 'mouse') return; if (Math.abs(e.clientY - startY) > 6) end(); else { dragging = false; toggle(); } }));
+  }
+  if (scroll) scroll.style.overflowY = y <= lo() + 1 ? 'auto' : 'hidden';
+  addEventListener('resize', () => { if (sheet.isConnected) settle(snaps()[Math.min(start, snaps().length - 1)]); });
+  return { vis: () => sheet.offsetHeight - y, settle: i => settle(snaps()[i]) };
+}
+function attachDrag(view, onSnap) {
+  const sh = view.querySelector('.dsheet'), sc = view.querySelector('.dscroll'), gz = view.querySelector('.grabzone');
+  const d = sheetDrag({ sheet: sh, scroll: sc, grab: gz, start: 1, onSnap,
+    snaps: () => [0, Math.max(0, sh.offsetHeight - innerHeight * 0.58), sh.offsetHeight - gz.offsetHeight - 8] });
+  view._vis = d.vis();
 }
 const TILE_LABELS = { conf: 'Booking code', seat: 'Seat', baggage: 'Baggage belt', aircraft: 'Aircraft', notes: 'Notes', gateDep: 'Departure gate', gateArr: 'Arrival gate', arrTime: 'Arrival time' };
 function editTile(id, src, field) {
@@ -1362,7 +1397,7 @@ $('#backupFile').addEventListener('change', async e => {
   try { const d = JSON.parse(await file.text()); S.flights = mergeList(S.flights, d.flights); S.friends = mergeList(S.friends, d.friends); save(); render(); toast('Restored'); }
   catch (err) { toast('Not a valid backup'); } e.target.value = '';
 });
-$('#hdrAction').addEventListener('click', () => openAdd());
+$('#dockSearch').addEventListener('click', () => openAdd());
 
 document.addEventListener('input', e => {
   const id = e.target.id;
