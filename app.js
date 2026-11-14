@@ -304,7 +304,7 @@ function viewSettings() {
       <p class="muted small" style="margin:0">${liveProxy() ? '✓ Using your OpenSky server.' : 'Leave empty unless live position doesn’t show up.'}</p></div>
     <h2>Sync server</h2><div class="card">${syncServerHtml()}</div>
     <h2>Data</h2><div class="card"><div class="actions" style="margin:0"><button class="btn sm" data-act="backup">Download backup</button><button class="btn sm" data-act="restore">Restore backup</button><button class="btn sm danger" data-act="wipe">Delete all data</button></div></div>
-    <p class="muted small" style="text-align:center">Contrail · version 21</p>`;
+    <p class="muted small" style="text-align:center">Contrail · version 22</p>`;
 }
 
 // ---------- Sheets ----------
@@ -385,16 +385,69 @@ const liveLine = f => { if (!liveFresh(f)) return ''; const p = f.livePos, km = 
 // ---------- Globe maps (MapLibre + NASA night-lights imagery, no API key) ----------
 const NIGHT_TILES = 'https://gibs.earthdata.nasa.gov/wmts/epsg3857/best/VIIRS_CityLights_2012/default//GoogleMapsCompatible_Level8/{z}/{y}/{x}.jpg';
 const ML = () => window.maplibregl;
+// ---- Day / night: blend NASA Blue Marble (day) and Black Marble (night lights) by the sun's real position ----
+const DN_STEP = 10 * M;
+const dnBucket = () => Math.floor(Date.now() / DN_STEP);
+const dnUrl = () => `daynight://{z}/{x}/{y}?b=${dnBucket()}`;
+function subsolar(t) {
+  const n = t / 864e5 + 2440587.5 - 2451545.0, r = Math.PI / 180;
+  const L = (280.46 + 0.9856474 * n) % 360, g = ((357.528 + 0.9856003 * n) % 360) * r;
+  const lam = (L + 1.915 * Math.sin(g) + 0.02 * Math.sin(2 * g)) * r, eps = (23.439 - 4e-7 * n) * r;
+  const dec = Math.asin(Math.sin(eps) * Math.sin(lam)) / r, ra = Math.atan2(Math.cos(eps) * Math.sin(lam), Math.cos(lam)) / r;
+  const gmst = (280.46061837 + 360.98564736629 * n) % 360;
+  return { lat: dec, lon: ((ra - gmst) % 360 + 540) % 360 - 180 };
+}
+const dayTileUrls = (z, x, y) => [`https://cdn.jsdelivr.net/gh/freetiler/nasa-bluemarble/tiles/${z}/${x}/${y}.jpeg`, `https://gibs.earthdata.nasa.gov/wmts/epsg3857/best/BlueMarble_ShadedRelief_Bathymetry/default//GoogleMapsCompatible_Level8/${z}/${y}/${x}.jpeg`];
+const nightTileUrls = (z, x, y) => [NIGHT_TILES.replace('{z}', z).replace('{y}', y).replace('{x}', x)];
+async function loadTileImg(urls, signal) {
+  for (const u of urls) { try { const r = await fetch(u, { signal }); if (!r.ok) continue; return await createImageBitmap(await r.blob()); } catch (e) { if (signal?.aborted) throw e; } }
+  return null;
+}
+async function dayNightTile(z, x, y, t, signal) {
+  const [day, night] = await Promise.all([loadTileImg(dayTileUrls(z, x, y), signal), loadTileImg(nightTileUrls(z, x, y), signal)]);
+  if (!day && !night) throw new Error('tile unavailable');
+  const c = document.createElement('canvas'); c.width = c.height = 256; const g = c.getContext('2d', { willReadFrequently: true });
+  if (day && night) {
+    g.drawImage(day, 0, 0, 256, 256); const D = g.getImageData(0, 0, 256, 256);
+    g.drawImage(night, 0, 0, 256, 256); const N = g.getImageData(0, 0, 256, 256);
+    const sun = subsolar(t), sinD = Math.sin(rad(sun.lat)), cosD = Math.cos(rad(sun.lat)), n = 2 ** z;
+    const cosH = new Float32Array(256); for (let px = 0; px < 256; px++) cosH[px] = Math.cos(rad((x + (px + 0.5) / 256) / n * 360 - 180 - sun.lon));
+    const o = D.data, nd = N.data;
+    for (let py = 0; py < 256; py++) {
+      const lat = Math.atan(Math.sinh(Math.PI * (1 - 2 * (y + (py + 0.5) / 256) / n))), a = Math.sin(lat) * sinD, b = Math.cos(lat) * cosD;
+      for (let px = 0; px < 256; px++) {
+        let k = (a + b * cosH[px] + 0.09) / 0.18; k = k <= 0 ? 0 : k >= 1 ? 1 : k * k * (3 - 2 * k); // twilight band
+        const i = (py * 256 + px) * 4, dm = 0.8 * k, nm = 1 - k;
+        o[i] = o[i] * dm + nd[i] * nm; o[i + 1] = o[i + 1] * dm + nd[i + 1] * nm; o[i + 2] = o[i + 2] * dm + nd[i + 2] * nm;
+      }
+    }
+    g.putImageData(D, 0, 0);
+  } else g.drawImage(day || night, 0, 0, 256, 256);
+  const blob = await new Promise(res => c.toBlob(res, 'image/jpeg', 0.88));
+  return await blob.arrayBuffer();
+}
+let dnReady = false;
+function registerDayNight() {
+  if (dnReady || !ML()?.addProtocol) return dnReady;
+  ML().addProtocol('daynight', async (params, ctl) => {
+    const m = params.url.match(/daynight:\/\/(\d+)\/(\d+)\/(\d+)\?b=(\d+)/);
+    return { data: await dayNightTile(+m[1], +m[2], +m[3], +m[4] * DN_STEP, ctl?.signal) };
+  });
+  return dnReady = true;
+}
+const globes = new Set();
+setInterval(() => globes.forEach(m => { try { if (m.getContainer().isConnected) m.getSource('night')?.setTiles([dnUrl()]); else globes.delete(m); } catch (e) {} }), DN_STEP);
 function globeStyle() {
+  const dn = registerDayNight();
   return { version: 8, projection: { type: 'globe' },
-    sources: { night: { type: 'raster', tiles: [NIGHT_TILES], tileSize: 256, maxzoom: 8, attribution: 'Imagery © NASA GIBS' } },
+    sources: { night: { type: 'raster', tiles: [dn ? dnUrl() : NIGHT_TILES], tileSize: 256, maxzoom: 8, attribution: 'Imagery © NASA (Blue Marble, Black Marble)' } },
     layers: [{ id: 'space', type: 'background', paint: { 'background-color': '#02040a' } },
              { id: 'night', type: 'raster', source: 'night', paint: { 'raster-saturation': -0.15, 'raster-contrast': 0.2, 'raster-brightness-min': 0.04 } }],
     sky: { 'atmosphere-blend': ['interpolate', ['linear'], ['zoom'], 0, 1, 5, 1, 7, 0] } };
 }
 function makeGlobe(box, { interactive = true, center = [10, 30], zoom = 1.2 } = {}) {
   const map = new (ML().Map)({ container: box, style: globeStyle(), center, zoom, interactive, attributionControl: { compact: true }, renderWorldCopies: false, maxZoom: 9 });
-  map._markers = [];
+  map._markers = []; globes.add(map);
   map.on('rotate', () => map.getContainer().querySelectorAll('.gplane2 .hdg').forEach(e => { e.style.transform = `rotate(${+e.dataset.h - map.getBearing()}deg)`; }));
   map._ready = new Promise(res => map.on('load', () => {
     map.resize();
@@ -1659,5 +1712,5 @@ setInterval(() => refreshAll(), 10 * M);
 document.body.classList.toggle('standalone', isStandalone());
 document.addEventListener('visibilitychange', () => { if (!document.hidden && account) { if (document.activeElement?.id !== 'quickNum') render(); refreshAll(); } });
 if ('serviceWorker' in navigator && location.protocol === 'https:') navigator.serviceWorker.register('sw.js', { updateViaCache: 'none' }).then(r => r.update()).catch(() => {});
-window.__contrail = { S, parseIcs, detectFlight, importIcsText, zonedToUtc, shareUrl, receiveShare };
+window.__contrail = { dayNightTile, subsolar, S, parseIcs, detectFlight, importIcsText, zonedToUtc, shareUrl, receiveShare };
 })();
