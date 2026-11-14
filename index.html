@@ -254,10 +254,14 @@ header{z-index:20}
 .maplibregl-ctrl-attrib a{color:#bbb!important}
 .maplibregl-ctrl-attrib-button{filter:invert(1);opacity:.5}
 body.home .maplibregl-ctrl-bottom-right{bottom:auto;top:calc(52px + env(safe-area-inset-top))}
-.gpin{display:flex;align-items:center;gap:0;font-weight:700;font-size:13px;transform:translateY(-1px);white-space:nowrap;pointer-events:none}
-.gpin i{width:12px;height:12px;border-radius:50%;background:#8fd0ff;border:2px solid #fff;box-shadow:0 0 10px #8fd0ff;margin-right:8px;flex:none}
-.gpin span{background:rgba(30,90,200,.92);padding:4px 8px;border-radius:8px 0 0 8px;color:#fff}
-.gpin b{background:rgba(12,40,110,.95);padding:4px 8px;border-radius:0 8px 8px 0;color:#fff}
+.gpin{display:flex;align-items:center;font-weight:700;font-size:11px;white-space:nowrap;pointer-events:none;letter-spacing:0}
+.gpin.l{flex-direction:row-reverse}
+.gpin i{width:12px;height:12px;border-radius:50%;background:#8fd0ff;border:2px solid #fff;box-shadow:0 0 10px #8fd0ff;flex:none}
+.gpin.r i{margin-right:6px}.gpin.l i{margin-left:6px}
+.gpin span{background:rgba(30,90,200,.9);padding:3px 6px;color:#fff}
+.gpin b{background:rgba(12,40,110,.95);padding:3px 6px;color:#fff}
+.gpin.r span{border-radius:7px 0 0 7px}.gpin.r b{border-radius:0 7px 7px 0}
+.gpin.l b{border-radius:0 7px 7px 0;order:-1}.gpin.l span{border-radius:7px 0 0 7px;order:-2}
 .gplane{color:#fff;filter:drop-shadow(0 0 8px rgba(126,240,220,.9))}
 .map.dmap{height:260px;background:#02040a}
 .map.nomap{display:none}
@@ -265,6 +269,18 @@ body.home .maplibregl-ctrl-bottom-right{bottom:auto;top:calc(52px + env(safe-are
 .srcnote.warn{color:var(--warn)}.srcnote.ok{color:var(--good)}
 .link.inl{padding:0;font-size:13px;display:inline}
 .steps{padding-left:20px;margin:6px 0 12px}.steps li{margin-bottom:4px}
+
+/* v6: full-screen flight view with draggable sheet */
+.fview{position:fixed;inset:0;z-index:50;background:#02040a;animation:fade .2s}
+.fview .fmap{position:absolute;inset:0}
+.fview .fmap.nomap{display:block;background:radial-gradient(circle at 50% 30%,#0b1430,#02040a 70%)}
+.dsheet{position:absolute;left:0;right:0;bottom:0;margin:0 auto;max-width:720px;height:calc(100% - 56px - env(safe-area-inset-top));display:flex;flex-direction:column;border-radius:32px 32px 0 0;background:rgba(16,20,36,.8);-webkit-backdrop-filter:saturate(170%) blur(30px);backdrop-filter:saturate(170%) blur(30px);border:1px solid var(--stroke);border-bottom:0;box-shadow:0 1px 0 rgba(255,255,255,.25) inset,0 -16px 40px rgba(0,0,0,.45);transition:transform .38s cubic-bezier(.2,.9,.25,1);will-change:transform}
+.grabzone{padding:8px 18px 0;touch-action:none;cursor:grab;flex:none}
+.grabber{width:42px;height:5px;border-radius:5px;background:rgba(255,255,255,.35);margin:0 auto 4px}
+.grabzone .dhead{margin:10px 0 12px}
+.dscroll{flex:1;overflow-y:auto;-webkit-overflow-scrolling:touch;overscroll-behavior:contain;padding:0 18px calc(30px + env(safe-area-inset-bottom))}
+.fview .maplibregl-ctrl-top-right,.fview .maplibregl-ctrl-bottom-right{top:calc(8px + env(safe-area-inset-top));bottom:auto}
+.sheet>div{overscroll-behavior:contain}
 </style>
 </head>
 <body>

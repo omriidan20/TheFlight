@@ -321,6 +321,7 @@ function makeGlobe(box, { interactive = true, center = [10, 30], zoom = 1.2 } = 
   const map = new (ML().Map)({ container: box, style: globeStyle(), center, zoom, interactive, attributionControl: { compact: true }, renderWorldCopies: false, maxZoom: 9 });
   map._markers = [];
   map._ready = new Promise(res => map.on('load', () => {
+    map.resize();
     map.addSource('routes', { type: 'geojson', data: { type: 'FeatureCollection', features: [] } });
     map.addLayer({ id: 'routes-glow', type: 'line', source: 'routes', filter: ['==', ['get', 'kind'], 'main'], paint: { 'line-color': '#7cc4ff', 'line-width': 9, 'line-opacity': 0.18, 'line-blur': 4 }, layout: { 'line-cap': 'round' } });
     map.addLayer({ id: 'routes-dim', type: 'line', source: 'routes', filter: ['==', ['get', 'kind'], 'dim'], paint: { 'line-color': '#7ef0dc', 'line-width': 1.4, 'line-opacity': 0.55 }, layout: { 'line-cap': 'round' } });
@@ -331,13 +332,28 @@ function makeGlobe(box, { interactive = true, center = [10, 30], zoom = 1.2 } = 
   return map;
 }
 const lineFeat = (coords, kind, id) => ({ type: 'Feature', properties: { kind, id }, geometry: { type: 'LineString', coordinates: coords.map(([la, lo]) => [lo, la]) } });
-function apLabel2(a, side) {
+function pinMarker(map, a, side) {
   const el = document.createElement('div'); el.className = 'gpin ' + side;
-  el.innerHTML = `<i></i><span>${esc(a.city || a.name || '')}</span><b>${esc(a.iata)}</b>`; return el;
+  el.innerHTML = `<i></i><span>${esc(a.city || a.name || '')}</span><b>${esc(a.iata)}</b>`;
+  return new (ML().Marker)({ element: el, anchor: side === 'r' ? 'left' : 'right', offset: side === 'r' ? [-6, 0] : [6, 0] }).setLngLat([a.lon, a.lat]).addTo(map);
+}
+// Camera that fits a route into the part of the map not covered by panels
+function routeCam(map, f, padTop = 0, padBottom = 0) {
+  const c = map.getContainer(), W = c.clientWidth || innerWidth, Hh = c.clientHeight || innerHeight;
+  const visH = Math.max(140, Hh - padTop - padBottom);
+  const mid = gcPoint(f.from, f.to, 0.5), km = Math.max(distKm(f.from, f.to), 60);
+  const target = 0.66 * Math.min(W - 40, visH * 1.35);
+  const zoom = Math.max(0.9, Math.min(7, Math.log2(target * 40075 * Math.cos(rad(mid[0])) / (km * 512))));
+  return { center: [mid[1], mid[0]], zoom, padding: { top: padTop, bottom: padBottom, left: 0, right: 0 } };
+}
+function placePins(map, f) {
+  map._pins?.forEach(m => m.remove());
+  const pa = map.project([f.from.lon, f.from.lat]), pb = map.project([f.to.lon, f.to.lat]), fromLeft = pa.x <= pb.x;
+  map._pins = [pinMarker(map, f.from, fromLeft ? 'l' : 'r'), pinMarker(map, f.to, fromLeft ? 'r' : 'l')];
 }
 async function showRoutes(map, flights, focus, opts = {}) {
-  await map._ready;
-  map._markers.forEach(m => m.remove()); map._markers = [];
+  await map._ready; map.resize();
+  map._markers.forEach(m => m.remove()); map._markers = []; map._pins?.forEach(m => m.remove()); map._pins = [];
   const feats = [];
   flights.filter(f => f.from?.lat != null && f.to?.lat != null).forEach(f => {
     const line = gcLine(f.from, f.to, 96);
@@ -353,11 +369,10 @@ async function showRoutes(map, flights, focus, opts = {}) {
     } else feats.push(lineFeat(line, 'dim', f.id));
   });
   map.getSource('routes').setData({ type: 'FeatureCollection', features: feats });
+  map._focus = focus;
   if (focus && focus.from?.lat != null && focus.to?.lat != null) {
-    [[focus.from, 'a'], [focus.to, 'b']].forEach(([a, side]) => map._markers.push(new (ML().Marker)({ element: apLabel2(a, side), anchor: 'left', offset: [-6, 0] }).setLngLat([a.lon, a.lat]).addTo(map)));
-    const mid = gcPoint(focus.from, focus.to, 0.5), km = distKm(focus.from, focus.to);
-    const zoom = Math.max(0.9, Math.min(5.2, 4.6 - Math.log2(Math.max(km, 150) / 400)));
-    map.jumpTo({ center: [mid[1], mid[0] - (opts.shiftDown || 0) * (6 / Math.pow(2, zoom - 1))], zoom: zoom + (opts.zoomAdj || 0) });
+    map.jumpTo(routeCam(map, focus, opts.padTop || 0, opts.padBottom || 0));
+    placePins(map, focus);
   } else if (opts.fitAll) {
     const pts = flights.flatMap(f => f.from?.lat != null && f.to?.lat != null ? [[f.from.lon, f.from.lat], [f.to.lon, f.to.lat]] : []);
     if (pts.length) { const lon = pts.reduce((s, p) => s + p[0], 0) / pts.length, lat = pts.reduce((s, p) => s + p[1], 0) / pts.length; map.jumpTo({ center: [lon, lat], zoom: 1.1 }); }
@@ -368,7 +383,7 @@ function drawFlightMap(el, f) {
   const box = el.querySelector('#fmap'); if (!box) return;
   if (f.from?.lat == null || f.to?.lat == null) { box.style.display = 'none'; return; }
   if (!ML()) { if (!el._tries) el._tries = 0; if (el._tries++ < 20) setTimeout(() => $('#sheet') === el && drawFlightMap(el, f), 400); else globeFallback(box); return; }
-  try { const map = makeGlobe(box, { interactive: true }); el._map = map; showRoutes(map, [f], f, { shiftDown: 0.4 }); } catch (e) { console.warn(e); globeFallback(box); }
+  try { const map = makeGlobe(box, { interactive: true }); el._map = map; showRoutes(map, [f], f, { padTop: 70, padBottom: el._vis || innerHeight * 0.55 }); } catch (e) { console.warn(e); globeFallback(box); }
 }
 // Home: one persistent full-screen globe behind the flight list
 let homeGlobe = null;
@@ -383,9 +398,10 @@ function updateHomeGlobe() {
     const now = Date.now(), up = live(S.flights).filter(f => arrT(f) > now - 6 * H).sort((a, b) => depT(a) - depT(b));
     const focus = up.find(f => f.from?.lat != null && f.to?.lat != null);
     homeGlobe._focus = focus?.id;
-    const key = JSON.stringify(up.map(f => [f.id, f.from?.iata, f.to?.iata, Math.round(phase(f).p * 50)]));
+    requestAnimationFrame(() => { try { homeGlobe.resize(); } catch (e) {} });
+    const key = JSON.stringify([innerWidth, innerHeight, ...up.map(f => [f.id, f.from?.iata, f.to?.iata, Math.round(phase(f).p * 50)])]);
     if (homeGlobe._key === key) return; homeGlobe._key = key;
-    showRoutes(homeGlobe, focus ? up : live(S.flights), focus, { fitAll: true, shiftDown: 1.1, zoomAdj: -0.35 });
+    showRoutes(homeGlobe, focus ? up : live(S.flights), focus, { fitAll: true, padTop: 90, padBottom: innerHeight * 0.56 });
   } catch (e) { console.warn(e); }
 }
 let worldMap = null;
@@ -471,14 +487,17 @@ function openFlight(id, src = 'flights') {
   const f = S[src].find(x => x.id === id); if (!f) return;
   const ph = phase(f), now = Date.now(), friend = src === 'friends', d = depT(f), a = arrT(f), plus = dayDiff(f), dl = delayMin(f);
   const status = ph.key === 'air' ? `Lands in ${dur(a - now)}` : ph.key === 'landed' ? `Landed ${fmtDate(a, f.to?.tz)}` : ph.key === 'cancel' ? 'Canceled' : `Departs in ${dur(d - now)}`;
-  const sub2 = dl >= 15 ? `Delayed ${dur(dl * M)}` : f.status && !/unknown/i.test(f.status) ? esc(f.status) : f.estArr ? 'Arrival time is estimated — tap it to set' : f.updatedLive ? 'On time' : 'Scheduled';
+  const sub2 = ph.key === 'landed' ? (dl >= 15 ? `Arrived ${dur(dl * M)} late` : 'Completed') : dl >= 15 ? `Delayed ${dur(dl * M)}` : f.status && !/unknown/i.test(f.status) ? esc(f.status) : f.estArr ? 'Arrival time is estimated — tap it to set' : f.updatedLive ? 'On time' : 'Scheduled';
   const km = distKm(f.from, f.to);
   const overnight = plus > 0 || (+localHM(d, f.from?.tz).slice(0, 2) >= 21);
   const gate = (term, g, which) => `<button class="gatechip" data-act="tile" data-field="${which}" data-id="${f.id}" data-src="${src}"><b>${esc(g || '—')}</b><span>${term ? 'Terminal ' + esc(term) : 'Gate'}</span></button>`;
   const tile = (field, label, val, icon) => `<button class="tile" data-act="tile" data-field="${field}" data-id="${f.id}" data-src="${src}"><span class="ti">${icon}</span><b>${label}</b><span class="${val ? '' : 'muted'}">${esc(val || 'Tap to add')}</span></button>`;
-  sheet(`<div class="map dmap" id="fmap"></div>
-    <div class="dhead">${badge(f.num.slice(0, 2), true)}<div class="sp"><div class="muted small caps">${esc(f.num)} · ${fmtDate(d, f.from?.tz)}${f.airline ? ' · ' + esc(f.airline) : ''}</div><h3>${cityOf(f.from)} to ${cityOf(f.to)}</h3>${friend ? `<div class="muted small">Shared by ${esc(f.sharedBy || 'a friend')}</div>` : ''}</div><button class="icon-btn" data-act="close" aria-label="Close">✕</button></div>
-    <div class="statusbox ${ph.cls}"><b>${status}</b><span>${sub2}</span>${ph.key === 'air' ? `<div class="bar"><i style="width:${ph.p * 100}%"></i></div>` : ''}</div>
+  closeSheet();
+  const el = document.createElement('div'); el.className = 'fview'; el.id = 'sheet';
+  el.innerHTML = `<div class="fmap" id="fmap"></div>
+    <div class="dsheet"><div class="grabzone"><div class="grabber"></div>
+    <div class="dhead">${badge(f.num.slice(0, 2), true)}<div class="sp"><div class="muted small caps">${esc(f.num)} · ${fmtDate(d, f.from?.tz)}${f.airline ? ' · ' + esc(f.airline) : ''}</div><h3>${cityOf(f.from)} to ${cityOf(f.to)}</h3>${friend ? `<div class="muted small">Shared by ${esc(f.sharedBy || 'a friend')}</div>` : ''}</div><button class="icon-btn" data-act="close" aria-label="Close">✕</button></div></div>
+    <div class="dscroll"><div class="statusbox ${ph.cls}"><b>${status}</b><span>${sub2}</span>${ph.key === 'air' ? `<div class="bar"><i style="width:${ph.p * 100}%"></i></div>` : ''}</div>
     <div class="leg"><div class="lh"><i>↗</i> <b>${esc(f.from?.iata)}</b> · ${esc(f.from?.name || f.from?.city || '')}</div>
       <div class="lrow"><div><div class="bigt">${fmtTime(d, f.from?.tz)}</div><div class="muted small">${dl >= 5 ? `<s>${fmtTime(f.depSched, f.from?.tz)}</s> delayed` : 'Scheduled'} · ${fmtDate(d, f.from?.tz)}</div></div>${gate(f.terminalDep, f.gateDep, 'gateDep')}</div></div>
     <div class="legmid">⏱ ${dur(a - d)}${km ? ` · ${fmtDist(km)}` : ''}${overnight ? ' · ☾ Overnight' : ''}</div>
@@ -495,7 +514,33 @@ function openFlight(id, src = 'flights') {
       ${!friend ? `<button class="btn sm" data-act="edit" data-id="${f.id}">Edit route & times</button>` : ''}
       ${S.settings.apiKey ? `<button class="btn sm" data-act="refresh-one" data-id="${f.id}" data-src="${src}">↻ Refresh</button>` : ''}
       <button class="btn sm danger" data-act="delete" data-id="${f.id}" data-src="${src}">Delete</button>
-    </div>`, el => setTimeout(() => drawFlightMap(el, f), 30));
+    </div></div></div>`;
+  document.body.appendChild(el); document.body.style.overflow = 'hidden';
+  attachDrag(el, vis => { el._vis = vis; const m = el._map; if (m && m._focus) { m.easeTo({ ...routeCam(m, f, 70, vis), duration: 420 }); setTimeout(() => m._focus && placePins(m, f), 440); } });
+  setTimeout(() => drawFlightMap(el, f), 30);
+}
+function attachDrag(view, onSnap) {
+  const sh = view.querySelector('.dsheet'), sc = view.querySelector('.dscroll'), gz = view.querySelector('.grabzone');
+  const SH = () => sh.offsetHeight, snaps = () => [0, Math.max(0, SH() - innerHeight * 0.58), SH() - gz.offsetHeight - 8];
+  let y = snaps()[1], startY = 0, startT = 0, dragging = false, lastY = 0, lastT = 0, v = 0;
+  const apply = () => { sh.style.transform = `translateY(${y}px)`; };
+  sh.style.transition = 'none'; apply(); view._vis = SH() - y; requestAnimationFrame(() => { sh.style.transition = ''; });
+  const begin = cy => { dragging = true; startY = cy; startT = y; lastY = cy; lastT = performance.now(); v = 0; sh.style.transition = 'none'; };
+  const move = cy => { const t = performance.now(); v = (cy - lastY) / Math.max(1, t - lastT); lastY = cy; lastT = t; const max = snaps()[2]; let ny = startT + cy - startY; if (ny < 0) ny = ny / 3; if (ny > max) ny = max + (ny - max) / 3; y = ny; apply(); };
+  const settle = target => { y = target; sh.style.transition = ''; apply(); sc.style.overflowY = target === snaps()[2] ? 'hidden' : ''; onSnap(SH() - y); };
+  const end = () => {
+    dragging = false; const s = snaps();
+    let target = v > 0.45 ? (s.find(p => p > y + 4) ?? s[2]) : v < -0.45 ? ([...s].reverse().find(p => p < y - 4) ?? 0) : s.reduce((a, b) => Math.abs(b - y) < Math.abs(a - y) ? b : a);
+    settle(target);
+  };
+  gz.addEventListener('pointerdown', e => { if (e.target.closest('button')) return; begin(e.clientY); try { gz.setPointerCapture(e.pointerId); } catch (x) {} });
+  gz.addEventListener('pointermove', e => { if (dragging) move(e.clientY); });
+  ['pointerup', 'pointercancel'].forEach(t => gz.addEventListener(t, e => { if (!dragging) return; const moved = Math.abs(e.clientY - startY) > 6; if (moved) end(); else { dragging = false; const s = snaps(); settle(y >= s[2] - 2 ? s[1] : s[2]); } }));
+  let ty = null;
+  sc.addEventListener('touchstart', e => { ty = e.touches[0].clientY; }, { passive: true });
+  sc.addEventListener('touchmove', e => { const cy = e.touches[0].clientY; if (!dragging && sc.scrollTop <= 0 && cy - ty > 6) begin(ty); if (dragging) { e.preventDefault(); move(cy); } }, { passive: false });
+  sc.addEventListener('touchend', () => { if (dragging) end(); });
+  addEventListener('resize', () => { if (!view.isConnected) return; settle(snaps()[1]); });
 }
 const TILE_LABELS = { conf: 'Booking code', seat: 'Seat', baggage: 'Baggage belt', aircraft: 'Aircraft', notes: 'Notes', gateDep: 'Departure gate', gateArr: 'Arrival gate', arrTime: 'Arrival time' };
 function editTile(id, src, field) {
@@ -576,7 +621,7 @@ async function afSearch(key) {
   const p = AF.p; let r = null;
   if (S.settings.apiKey) { try { const res = await lookupFlight(p.num, AF.date); if (res?.length) r = { ...res[0], full: true, legs: res }; } catch (e) {} }
   if (!r && AF.pre?.from && AF.pre?.to && (!AF.pre.num || parseFlight(AF.pre.num)?.num === p.num)) r = { from: getAirport(AF.pre.from), to: getAirport(AF.pre.to) };
-  if (!r) { const mine = live(S.flights).filter(f => f.num === p.num && f.from?.iata && f.to?.iata).sort((a, b) => depT(b) - depT(a))[0]; if (mine) r = { from: mine.from, to: mine.to, src: 'history' }; }
+  if (!r) { const mine = live(S.flights).filter(f => f.num === p.num && f.from?.iata && f.to?.iata && f.source !== 'route' && f.routeSrc !== 'public').sort((a, b) => depT(b) - depT(a))[0]; if (mine) r = { from: mine.from, to: mine.to, src: 'history' }; }
   if (!r) { const fr = await freeRoute(p.num); if (fr) r = { ...fr, src: 'public' }; }
   if (!AF || AF.key !== key) return;
   AF.route = r; AF.state = r ? 'found' : 'manual'; afBody();
@@ -621,7 +666,7 @@ function afAdd() {
     const dep = $('#af_dep')?.value; if (!dep) { $('#af_dep').focus(); return toast('Add the departure time'); }
     const depSched = zonedToUtc(AF.date, dep, from.tz), arr = $('#af_arr')?.value;
     let arrSched; if (arr) { arrSched = zonedToUtc(AF.date, arr, to.tz); while (arrSched <= depSched) arrSched += 864e5; } else arrSched = depSched + estDur(from, to);
-    f = { id: uid(), num: p.num, airline: p.airline || r?.airline || '', from, to, depSched, arrSched, estArr: !arr, source: r ? 'route' : 'manual', updatedAt: Date.now() };
+    f = { id: uid(), num: p.num, airline: p.airline || r?.airline || '', from, to, depSched, arrSched, estArr: !arr, source: r ? 'route' : 'manual', routeSrc: r?.src || 'manual', updatedAt: Date.now() };
   }
   if (pre.seat) f.seat = pre.seat; if (pre.conf) f.conf = pre.conf;
   S.flights.push(f); save(); AF = null; closeSheet(); tab = 'flights'; sub = arrT(f) > Date.now() - 6 * H ? 'upcoming' : 'past'; render(); openFlight(f.id);
@@ -786,7 +831,8 @@ async function refreshFlight(f) {
 async function refreshAll(force) {
   if (!S.settings.apiKey) return;
   const now = Date.now();
-  const due = [...live(S.flights), ...live(S.friends)].filter(f => depT(f) - now < 36 * H && arrT(f) > now - 2 * H && (force || !f.updatedLive || now - f.updatedLive > 10 * M));
+  const every = f => (now > depT(f) - 3 * H && now < arrT(f) + 30 * M) ? 15 * M : 6 * H;
+  const due = [...live(S.flights), ...live(S.friends)].filter(f => depT(f) - now < 36 * H && arrT(f) > now - 1 * H && (force || !f.updatedLive || now - f.updatedLive > every(f)));
   let n = 0;
   for (const f of due) { try { if (await refreshFlight(f)) n++; } catch (e) { console.warn(e); } }
   if (n) { save(); render(); }
