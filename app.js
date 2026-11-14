@@ -233,7 +233,8 @@ function render() {
   $('#title').textContent = TITLES[tab];
   const av = $('#hdrAvatar'); av.textContent = initials(account.username); av.setAttribute('style', avatarStyle(account.username));
   const m = $('#main');
-  if (tab === 'flights') { m.innerHTML = viewFlights(); drawHeroMap(); }
+  document.body.classList.toggle('home', tab === 'flights');
+  if (tab === 'flights') { m.innerHTML = viewFlights(); updateHomeGlobe(); }
   else if (tab === 'friends') m.innerHTML = viewFriends();
   else if (tab === 'stats') { m.innerHTML = viewStats(); drawWorldMap(); }
   else m.innerHTML = viewSettings();
@@ -282,8 +283,12 @@ function viewSettings() {
       <p class="muted small" style="margin-bottom:0">Export a calendar file from Google Calendar, Apple Calendar, Outlook or TripIt and import it — Contrail finds the flights automatically.</p></div>
     <h2>Notifications</h2><div class="card"><button class="btn" data-act="notify">${st.notify && 'Notification' in window && Notification.permission === 'granted' ? '✓ Reminders on' : 'Turn on departure reminders'}</button>
       <p class="muted small" style="margin-bottom:0">Reminders 3 hours and 45 minutes before departure, and when you land, while Contrail is open or installed.</p></div>
-    <h2>Live flight data</h2><div class="card"><label class="f"><span>AeroDataBox API key (free tier on RapidAPI)</span><input id="setKey" value="${esc(st.apiKey)}" placeholder="Paste key to enable lookup & live updates" autocomplete="off"></label>
-      <p class="muted small" style="margin:0">With a key, type a flight number and date to auto-fill airports, times, gates, terminals, delays and aircraft. Without one, add flights manually — everything else still works.</p></div>
+    <h2>Live flight data</h2><div class="card" id="liveCard">
+      <p class="small" style="margin-top:0">${st.apiKey ? '✓ <b>Live data is on.</b> Times, gates, terminals, delays and aircraft fill in automatically and update every 10 minutes.' : 'Turn this on to get exact <b>times, gates, terminals, delays and aircraft</b> automatically. It’s free for personal use (AeroDataBox free plan).'}</p>
+      ${st.apiKey ? '' : `<ol class="small muted steps"><li>Open <a href="https://rapidapi.com/aedbx-aedbx/api/aerodatabox/pricing" target="_blank" rel="noopener">AeroDataBox on RapidAPI</a> and sign up (free).</li><li>Choose the <b>Basic</b> plan ($0) and tap <b>Subscribe</b>.</li><li>Open the <b>Endpoints</b> tab and copy the <b>X-RapidAPI-Key</b> value.</li><li>Paste it below.</li></ol>`}
+      <label class="f"><span>API key</span><input id="setKey" value="${esc(st.apiKey)}" placeholder="Paste your X-RapidAPI-Key" autocomplete="off" autocapitalize="none" spellcheck="false"></label>
+      <button class="btn sm" data-act="test-key">Test it</button>
+      <p class="muted small" style="margin-bottom:0">Your key is saved to your account only, so it works on all your devices.</p></div>
     <h2>Sync server</h2><div class="card">${syncServerHtml()}</div>
     <h2>Data</h2><div class="card"><div class="actions" style="margin:0"><button class="btn sm" data-act="backup">Download backup</button><button class="btn sm" data-act="restore">Restore backup</button><button class="btn sm danger" data-act="wipe">Delete all data</button></div></div>
     <p class="muted small" style="text-align:center">Contrail · free & open · your data stays on your device</p>`;
@@ -302,47 +307,93 @@ function sheet(html, onMount) {
 function closeSheet() { const s = $('#sheet'); if (s) { s._map && s._map.remove(); s.remove(); } document.body.style.overflow = ''; }
 const sheetHd = title => `<div class="hd"><h3>${title}</h3><button class="icon-btn" data-act="close" aria-label="Close">✕</button></div>`;
 
-function drawFlightMap(el, f) {
-  const box = el.querySelector('#fmap');
-  if (!window.L || f.from?.lat == null || f.to?.lat == null) { if (!window.L) setTimeout(() => $('#sheet') === el && drawFlightMap(el, f), 800); else box.style.display = 'none'; return; }
-  el._map = routeMap(box, f);
+// ---------- Globe maps (MapLibre + NASA night-lights imagery, no API key) ----------
+const NIGHT_TILES = 'https://gibs.earthdata.nasa.gov/wmts/epsg3857/best/VIIRS_CityLights_2012/default//GoogleMapsCompatible_Level8/{z}/{y}/{x}.jpg';
+const ML = () => window.maplibregl;
+function globeStyle() {
+  return { version: 8, projection: { type: 'globe' },
+    sources: { night: { type: 'raster', tiles: [NIGHT_TILES], tileSize: 256, maxzoom: 8, attribution: 'Imagery © NASA GIBS' } },
+    layers: [{ id: 'space', type: 'background', paint: { 'background-color': '#02040a' } },
+             { id: 'night', type: 'raster', source: 'night', paint: { 'raster-saturation': -0.15, 'raster-contrast': 0.2, 'raster-brightness-min': 0.04 } }],
+    sky: { 'atmosphere-blend': ['interpolate', ['linear'], ['zoom'], 0, 1, 5, 1, 7, 0] } };
 }
-let heroMap = null;
-function drawHeroMap() {
-  const box = $('#heroMap'); if (!box) return;
-  if (heroMap) { try { heroMap.remove(); } catch (e) {} heroMap = null; }
-  if (!window.L) { setTimeout(drawHeroMap, 800); return; }
-  const f = S.flights.find(x => x.id === box.dataset.hero); if (f) heroMap = routeMap(box, f, true);
-}
-function routeMap(box, f, still) {
-  const map = L.map(box, { zoomControl: false, attributionControl: true, worldCopyJump: true, dragging: !still, scrollWheelZoom: !still, touchZoom: !still, doubleClickZoom: !still, boxZoom: false, keyboard: false });
-  L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png', { attribution: '© OpenStreetMap © CARTO', subdomains: 'abcd', maxZoom: 18 }).addTo(map);
-  const line = gcLine(f.from, f.to);
-  const ph = phase(f);
-  const cut = Math.round(Math.max(0, Math.min(1, ph.p)) * (line.length - 1));
-  L.polyline(line, { color: '#38bdf8', weight: 2, opacity: .45, dashArray: '4 6' }).addTo(map);
-  if (cut > 0) L.polyline(line.slice(0, cut + 1), { color: '#5eead4', weight: 3 }).addTo(map);
-  [[f.from, line[0]], [f.to, line[line.length - 1]]].forEach(([ap, p]) => L.circleMarker(p, { radius: 5, color: '#e8edf7', fillColor: '#0b1220', fillOpacity: 1, weight: 2 }).addTo(map).bindTooltip(ap.iata, { permanent: true, direction: 'top', className: '' }));
-  if (ph.key === 'air') {
-    const p = line[cut], q = line[Math.min(cut + 1, line.length - 1)], b = bearing(p, q);
-    L.marker(p, { icon: L.divIcon({ className: 'plane-ico', html: planeSvg(b, 26), iconSize: [26, 26], iconAnchor: [13, 13] }) }).addTo(map);
-  }
-  map.fitBounds(L.latLngBounds(line), { padding: [34, 34] });
+function makeGlobe(box, { interactive = true, center = [10, 30], zoom = 1.2 } = {}) {
+  const map = new (ML().Map)({ container: box, style: globeStyle(), center, zoom, interactive, attributionControl: { compact: true }, renderWorldCopies: false, maxZoom: 9 });
+  map._markers = [];
+  map._ready = new Promise(res => map.on('load', () => {
+    map.addSource('routes', { type: 'geojson', data: { type: 'FeatureCollection', features: [] } });
+    map.addLayer({ id: 'routes-glow', type: 'line', source: 'routes', filter: ['==', ['get', 'kind'], 'main'], paint: { 'line-color': '#7cc4ff', 'line-width': 9, 'line-opacity': 0.18, 'line-blur': 4 }, layout: { 'line-cap': 'round' } });
+    map.addLayer({ id: 'routes-dim', type: 'line', source: 'routes', filter: ['==', ['get', 'kind'], 'dim'], paint: { 'line-color': '#7ef0dc', 'line-width': 1.4, 'line-opacity': 0.55 }, layout: { 'line-cap': 'round' } });
+    map.addLayer({ id: 'routes-main', type: 'line', source: 'routes', filter: ['==', ['get', 'kind'], 'main'], paint: { 'line-color': '#8fd0ff', 'line-width': 2.8 }, layout: { 'line-cap': 'round' } });
+    map.addLayer({ id: 'routes-done', type: 'line', source: 'routes', filter: ['==', ['get', 'kind'], 'done'], paint: { 'line-color': '#7ef0dc', 'line-width': 3.2 }, layout: { 'line-cap': 'round' } });
+    res(map);
+  }));
   return map;
+}
+const lineFeat = (coords, kind, id) => ({ type: 'Feature', properties: { kind, id }, geometry: { type: 'LineString', coordinates: coords.map(([la, lo]) => [lo, la]) } });
+function apLabel2(a, side) {
+  const el = document.createElement('div'); el.className = 'gpin ' + side;
+  el.innerHTML = `<i></i><span>${esc(a.city || a.name || '')}</span><b>${esc(a.iata)}</b>`; return el;
+}
+async function showRoutes(map, flights, focus, opts = {}) {
+  await map._ready;
+  map._markers.forEach(m => m.remove()); map._markers = [];
+  const feats = [];
+  flights.filter(f => f.from?.lat != null && f.to?.lat != null).forEach(f => {
+    const line = gcLine(f.from, f.to, 96);
+    if (focus && f.id === focus.id) {
+      const ph = phase(f), cut = Math.round(Math.max(0, Math.min(1, ph.p)) * (line.length - 1));
+      feats.push(lineFeat(line, 'main', f.id));
+      if (cut > 0) feats.push(lineFeat(line.slice(0, cut + 1), 'done', f.id));
+      if (ph.key === 'air') {
+        const p = line[cut], q = line[Math.min(cut + 1, line.length - 1)], el = document.createElement('div');
+        el.className = 'gplane'; el.innerHTML = planeSvg(bearing(p, q), 30);
+        map._markers.push(new (ML().Marker)({ element: el }).setLngLat([p[1], p[0]]).addTo(map));
+      }
+    } else feats.push(lineFeat(line, 'dim', f.id));
+  });
+  map.getSource('routes').setData({ type: 'FeatureCollection', features: feats });
+  if (focus && focus.from?.lat != null && focus.to?.lat != null) {
+    [[focus.from, 'a'], [focus.to, 'b']].forEach(([a, side]) => map._markers.push(new (ML().Marker)({ element: apLabel2(a, side), anchor: 'left', offset: [-6, 0] }).setLngLat([a.lon, a.lat]).addTo(map)));
+    const mid = gcPoint(focus.from, focus.to, 0.5), km = distKm(focus.from, focus.to);
+    const zoom = Math.max(0.9, Math.min(5.2, 4.6 - Math.log2(Math.max(km, 150) / 400)));
+    map.jumpTo({ center: [mid[1], mid[0] - (opts.shiftDown || 0) * (6 / Math.pow(2, zoom - 1))], zoom: zoom + (opts.zoomAdj || 0) });
+  } else if (opts.fitAll) {
+    const pts = flights.flatMap(f => f.from?.lat != null && f.to?.lat != null ? [[f.from.lon, f.from.lat], [f.to.lon, f.to.lat]] : []);
+    if (pts.length) { const lon = pts.reduce((s, p) => s + p[0], 0) / pts.length, lat = pts.reduce((s, p) => s + p[1], 0) / pts.length; map.jumpTo({ center: [lon, lat], zoom: 1.1 }); }
+  }
+}
+function globeFallback(box) { if (box) box.classList.add('nomap'); }
+function drawFlightMap(el, f) {
+  const box = el.querySelector('#fmap'); if (!box) return;
+  if (f.from?.lat == null || f.to?.lat == null) { box.style.display = 'none'; return; }
+  if (!ML()) { if (!el._tries) el._tries = 0; if (el._tries++ < 20) setTimeout(() => $('#sheet') === el && drawFlightMap(el, f), 400); else globeFallback(box); return; }
+  try { const map = makeGlobe(box, { interactive: true }); el._map = map; showRoutes(map, [f], f, { shiftDown: 0.4 }); } catch (e) { console.warn(e); globeFallback(box); }
+}
+// Home: one persistent full-screen globe behind the flight list
+let homeGlobe = null;
+function updateHomeGlobe() {
+  const box = $('#globe'); if (!box) return;
+  if (!ML()) { setTimeout(() => tab === 'flights' && updateHomeGlobe(), 500); return; }
+  try {
+    if (!homeGlobe) {
+      homeGlobe = makeGlobe(box, { interactive: true });
+      homeGlobe._ready.then(m => m.on('click', 'routes-main', () => homeGlobe._focus && openFlight(homeGlobe._focus)));
+    }
+    const now = Date.now(), up = live(S.flights).filter(f => arrT(f) > now - 6 * H).sort((a, b) => depT(a) - depT(b));
+    const focus = up.find(f => f.from?.lat != null && f.to?.lat != null);
+    homeGlobe._focus = focus?.id;
+    const key = JSON.stringify(up.map(f => [f.id, f.from?.iata, f.to?.iata, Math.round(phase(f).p * 50)]));
+    if (homeGlobe._key === key) return; homeGlobe._key = key;
+    showRoutes(homeGlobe, focus ? up : live(S.flights), focus, { fitAll: true, shiftDown: 1.1, zoomAdj: -0.35 });
+  } catch (e) { console.warn(e); }
 }
 let worldMap = null;
 function drawWorldMap() {
   const box = $('#worldMap'); if (!box) return;
-  if (!window.L) { box.innerHTML = '<div class="empty small">Map loading…</div>'; setTimeout(() => tab === 'stats' && drawWorldMap(), 800); return; }
-  box.innerHTML = '';
-  if (worldMap) { try { worldMap.remove(); } catch (e) {} }
-  const map = worldMap = L.map(box, { zoomControl: false, worldCopyJump: true }).setView([25, 0], 1);
-  L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png', { attribution: '© OpenStreetMap © CARTO', subdomains: 'abcd' }).addTo(map);
-  const s = computeStats(statYear), bounds = [];
-  s.fl.forEach(f => { if (f.from?.lat && f.to?.lat) { const l = gcLine(f.from, f.to, 40); bounds.push(...l); L.polyline(l, { color: '#5eead4', weight: 1.5, opacity: .7 }).addTo(map); } });
-  const seen = new Set();
-  s.fl.forEach(f => [f.from, f.to].forEach(a => { if (a?.lat && !seen.has(a.iata)) { seen.add(a.iata); L.circleMarker([a.lat, a.lon], { radius: 3, color: '#e8edf7', weight: 1, fillOpacity: 1 }).addTo(map).bindTooltip(a.iata); } }));
-  if (bounds.length) map.fitBounds(L.latLngBounds(bounds), { padding: [20, 20], maxZoom: 6 });
+  if (worldMap) { try { worldMap.remove(); } catch (e) {} worldMap = null; }
+  if (!ML()) { setTimeout(() => tab === 'stats' && drawWorldMap(), 500); return; }
+  try { worldMap = makeGlobe(box, { interactive: true }); showRoutes(worldMap, computeStats(statYear).fl, null, { fitAll: true }); } catch (e) { globeFallback(box); }
 }
 
 function viewFlights() {
@@ -350,9 +401,7 @@ function viewFlights() {
   const up = all.filter(f => arrT(f) > now - 6 * H).sort((a, b) => depT(a) - depT(b));
   const past = all.filter(f => arrT(f) <= now - 6 * H).sort((a, b) => depT(b) - depT(a));
   const list = sub === 'upcoming' ? up : past;
-  const hero = up.find(f => f.from?.lat != null && f.to?.lat != null);
-  let html = hero ? `<div class="map hero" id="heroMap" data-hero="${esc(hero.id)}"></div>` : '';
-  html += `<button class="quick" data-act="add"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" style="opacity:.6;flex:none"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg><span class="sp muted">Add a flight — LY8, Delta 100…</span><span class="plus">+</span></button>`;
+  let html = `<div class="homepanel"><button class="quick" data-act="add"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" style="opacity:.6;flex:none"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg><span class="sp muted">Add a flight — LY8, Delta 100…</span><span class="plus">+</span></button>`;
   html += `<div class="seg"><button data-sub="upcoming" class="${sub === 'upcoming' ? 'on' : ''}">Upcoming${up.length ? ` · ${up.length}` : ''}</button><button data-sub="past" class="${sub === 'past' ? 'on' : ''}">Past${past.length ? ` · ${past.length}` : ''}</button></div>`;
   if (!list.length) {
     html += `<div class="empty"><p>${sub === 'upcoming' ? 'No upcoming flights yet.' : 'No past flights yet.'}</p>
@@ -361,7 +410,7 @@ function viewFlights() {
     html += `<div class="card list">${list.map(f => rowItem(f)).join('')}</div>`;
     html += `<div class="actions"><button class="btn sm" data-act="import-ics">📅 Import from calendar</button>${S.settings.apiKey ? '<button class="btn sm" data-act="refresh-all">↻ Refresh live data</button>' : ''}</div>`;
   } else html += pastList(past);
-  return html;
+  return html + '</div>';
 }
 const dayDiff = f => { const a = localDate(arrT(f), f.to?.tz), d = localDate(depT(f), f.from?.tz); return Math.round((Date.parse(a) - Date.parse(d)) / 864e5); };
 const cityOf = a => esc(a?.city || a?.name || a?.iata || '???');
@@ -527,7 +576,8 @@ async function afSearch(key) {
   const p = AF.p; let r = null;
   if (S.settings.apiKey) { try { const res = await lookupFlight(p.num, AF.date); if (res?.length) r = { ...res[0], full: true, legs: res }; } catch (e) {} }
   if (!r && AF.pre?.from && AF.pre?.to && (!AF.pre.num || parseFlight(AF.pre.num)?.num === p.num)) r = { from: getAirport(AF.pre.from), to: getAirport(AF.pre.to) };
-  if (!r) { const fr = await freeRoute(p.num); if (fr) r = fr; }
+  if (!r) { const mine = live(S.flights).filter(f => f.num === p.num && f.from?.iata && f.to?.iata).sort((a, b) => depT(b) - depT(a))[0]; if (mine) r = { from: mine.from, to: mine.to, src: 'history' }; }
+  if (!r) { const fr = await freeRoute(p.num); if (fr) r = { ...fr, src: 'public' }; }
   if (!AF || AF.key !== key) return;
   AF.route = r; AF.state = r ? 'found' : 'manual'; afBody();
 }
@@ -537,7 +587,7 @@ function afBody() {
   if (AF.state === 'searching') { b.innerHTML = `<div class="card searching"><span class="spin"></span>Finding ${esc(AF.p.num)}…</div>`; return; }
   const r = AF.route, pre = AF.pre || {};
   if (AF.state === 'manual') {
-    b.innerHTML = `<div class="card"><p class="small muted" style="margin-top:0">Couldn’t find the route for <b>${esc(AF.p.num)}</b> automatically. Just add the airports:</p>
+    b.innerHTML = `<div class="card"><p class="small muted" style="margin-top:0">${AF.pre?.from ? 'Set the right airports' : `Couldn’t find the route for <b>${esc(AF.p.num)}</b> automatically. Just add the airports`}:</p>
       <div class="row"><label class="f"><span>From</span><input id="af_from" placeholder="Airport code" list="apList" maxlength="4" autocapitalize="characters" value="${esc(pre.from || '')}"></label><label class="f"><span>To</span><input id="af_to" placeholder="Airport code" list="apList" maxlength="4" autocapitalize="characters" value="${esc(pre.to || '')}"></label></div>
       ${afTimes(null, null)}<button class="btn pri block" data-act="af-add">Add flight</button></div>`; return;
   }
@@ -548,6 +598,9 @@ function afBody() {
     <div class="route"><div class="ap"><div class="code">${esc(r.from.iata)}</div><div class="city">${cityOf(r.from)}</div>${r.full ? `<div class="t">${fmtTime(r.depSched, r.from.tz)}</div>` : ''}</div>
       <div class="mid">${planeSvg(90, 18)}<div>${r.full ? dur(r.arrSched - r.depSched) : km ? '≈ ' + dur(estDur(r.from, r.to)) : ''}</div><div>${km ? fmtDist(km) : ''}</div></div>
       <div class="ap right"><div class="code">${esc(r.to.iata)}</div><div class="city" style="margin-left:auto">${cityOf(r.to)}</div>${r.full ? `<div class="t">${fmtTime(r.arrSched, r.to.tz)}</div>` : ''}</div></div>
+    ${r.full ? `<div class="srcnote ok">✓ Live schedule${r.status ? ' · ' + esc(r.status) : ''}${r.gateDep ? ' · Gate ' + esc(r.gateDep) : ''}${r.terminalDep ? ' · Terminal ' + esc(r.terminalDep) : ''}</div>`
+      : r.src === 'history' ? `<div class="srcnote">Route from your previous ${esc(AF.p.num)} flight · <button class="link inl" data-act="af-change">Change</button></div>`
+      : `<div class="srcnote warn">⚠︎ Route from a public database and may be outdated — check it. <button class="link inl" data-act="af-change">Change airports</button>${S.settings.apiKey ? '' : '<br>For exact times, gates and delays, <button class="link inl" data-act="goto-live">turn on live data</button> (free).'}</div>`}
     ${r.full ? '' : afTimes(r.from, r.to)}
     <button class="btn pri block" data-act="af-add" style="margin-top:12px">Add flight</button></div>`;
 }
@@ -711,6 +764,14 @@ async function doLookup() {
     S.flights.push(f); save(); closeSheet(); tab = 'flights'; sub = 'upcoming'; render(); openFlight(f.id);
     toast(`Added ${f.num} ${f.from.iata} → ${f.to.iata}`);
   } catch (e) { toast(e.message); } finally { btn.disabled = false; btn.textContent = 'Look up flight'; }
+}
+async function testKey(btn) {
+  const k = ($('#setKey')?.value || '').trim(); if (!k) return toast('Paste your key first');
+  S.settings.apiKey = k; save();
+  btn.disabled = true; btn.textContent = 'Testing…';
+  try { const r = await lookupFlight('LY8', localDate(Date.now() + 864e5, DEVICE_TZ)); toast(r && r.length ? `✓ Works — LY8 ${r[0].from.iata} → ${r[0].to.iata}` : '✓ Key works'); render(); }
+  catch (e) { toast(/40[13]/.test(e.message) ? 'Key not accepted — check you subscribed to the Basic plan' : e.message); }
+  btn.disabled = false; btn.textContent = 'Test it';
 }
 async function refreshFlight(f) {
   const res = await lookupFlight(f.num, localDate(f.depSched, f.from?.tz));
@@ -962,7 +1023,7 @@ async function signOut() {
 }
 let authMode = 'signin';
 function renderAuth() {
-  document.body.classList.remove('authed'); closeSheet();
+  document.body.classList.remove('authed', 'home'); closeSheet();
   const cloud = !!parseConfig(fbCfgText());
   const isUp = authMode === 'signup';
   $('#main').innerHTML = `<div class="auth"><div class="auth-card">
@@ -1044,7 +1105,7 @@ async function pull() {
   if (!fb || !user) return;
   try {
     const doc = await fb.db.collection('users').doc(user.uid).get();
-    if (doc.exists) { const d = doc.data(); S.flights = mergeList(S.flights, d.flights); S.friends = mergeList(S.friends, d.friends); if (!S.settings.name && d.name) S.settings.name = d.name; }
+    if (doc.exists) { const d = doc.data(); S.flights = mergeList(S.flights, d.flights); S.friends = mergeList(S.friends, d.friends); if (!S.settings.name && d.name) S.settings.name = d.name; if (!S.settings.apiKey && d.apiKey) S.settings.apiKey = d.apiKey; if (d.units) S.settings.units = d.units; }
     
     save(false); await push(); render();
   } catch (e) { console.error(e); toast('Sync failed: ' + (e.code || e.message)); }
@@ -1052,7 +1113,7 @@ async function pull() {
 const clean = o => JSON.parse(JSON.stringify(o));
 async function push() {
   if (!fb || !user) return;
-  try { await fb.db.collection('users').doc(user.uid).set(clean({ flights: S.flights, friends: S.friends, name: S.settings.name || '', updatedAt: Date.now() })); }
+  try { await fb.db.collection('users').doc(user.uid).set(clean({ flights: S.flights, friends: S.friends, name: S.settings.name || '', apiKey: S.settings.apiKey || '', units: S.settings.units || 'mi', updatedAt: Date.now() })); }
   catch (e) { console.error(e); }
 }
 function schedulePush() { if (!user) return; clearTimeout(pushTimer); pushTimer = setTimeout(push, 1200); }
@@ -1064,7 +1125,6 @@ document.addEventListener('click', async e => {
   if (t.dataset.tab) { tab = t.dataset.tab; render(); scrollTo(0, 0); return; }
   if (t.dataset.sub) { sub = t.dataset.sub; render(); return; }
   if (t.dataset.year) { statYear = t.dataset.year; render(); return; }
-  if (t.dataset.hero) { openFlight(t.dataset.hero); return; }
   if (t.dataset.open && t.dataset.open !== '' && !t.closest('.sheet')) { openFlight(t.dataset.open, t.dataset.src); return; }
   const id = t.dataset.id, src = t.dataset.src || 'flights';
   switch (t.dataset.act) {
@@ -1072,6 +1132,9 @@ document.addEventListener('click', async e => {
     case 'add': openAdd(); break;
     case 'af-date': AF.date = t.dataset.d; afDates(); afUpdate(); break;
     case 'af-add': afAdd(); break;
+    case 'af-change': AF.pre = { ...(AF.pre || {}), from: AF.route?.from?.iata, to: AF.route?.to?.iata, num: '' }; AF.route = null; AF.state = 'manual'; afBody(); break;
+    case 'goto-live': closeSheet(); tab = 'settings'; render(); setTimeout(() => $('#liveCard')?.scrollIntoView({ behavior: 'smooth', block: 'center' }), 50); break;
+    case 'test-key': testKey(t); break;
     case 'af-leg': { const l = AF.route.legs[+t.dataset.i]; AF.route = { ...l, full: true, legs: AF.route.legs }; afBody(); break; }
     case 'sort': pastSort = t.dataset.k; render(); break;
     case 'tile': editTile(id, src, t.dataset.field); break;
@@ -1121,7 +1184,7 @@ document.addEventListener('change', e => {
   const st = S.settings;
   if (e.target.id === 'setName') { st.name = e.target.value.trim(); save(); }
   if (e.target.id === 'setUnits') { st.units = e.target.value; save(false); }
-  if (e.target.id === 'setKey') { st.apiKey = e.target.value.trim(); save(false); toast(st.apiKey ? 'Live data on' : 'Live data off'); }
+  if (e.target.id === 'setKey') { st.apiKey = e.target.value.trim(); save(); toast(st.apiKey ? 'Key saved — tap Test it' : 'Live data off'); }
   if (e.target.id === 'e_from' || e.target.id === 'e_to') { e.target.value = e.target.value.toUpperCase(); if (e.target.id === 'e_from' && window.__lookup) scheduleAutoLookup(); }
   if (e.target.id === 'e_date') scheduleAutoLookup();
   if (e.target.id === 'af_otherdate' && e.target.value) { AF.date = e.target.value; afDates(); afUpdate(); }

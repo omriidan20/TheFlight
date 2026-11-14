@@ -11,7 +11,7 @@
 <link rel="manifest" href="manifest.webmanifest">
 <link rel="icon" href="icon.svg" type="image/svg+xml">
 <link rel="apple-touch-icon" href="icon.svg">
-<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
+<link rel="stylesheet" href="https://unpkg.com/maplibre-gl@5/dist/maplibre-gl.css">
 <style>
 :root{
   --text:#f5f7ff;--mute:rgba(235,240,255,.62);--faint:rgba(235,240,255,.38);
@@ -161,7 +161,7 @@ details summary{cursor:pointer}
 
 /* v3: flights list, add flow, flight detail, passport */
 .map.hero{height:34vh;min-height:200px;max-height:330px;margin:0 0 12px;cursor:pointer}
-.map.hero .leaflet-control-attribution{font-size:9px;background:rgba(0,0,0,.35);color:#aaa}
+
 button.quick{width:100%;color:inherit;text-align:left;cursor:pointer;padding:12px 8px 12px 16px;font-size:16px}
 .quick .sp{flex:1}.quick .plus{width:30px;height:30px;border-radius:50%;display:grid;place-items:center;background:rgba(126,240,220,.9);color:#04231f;font-weight:800;font-size:20px;line-height:1}
 .card.list{padding:4px 14px}
@@ -236,9 +236,39 @@ button.plain{background:none;border:0;padding:0;text-align:left;cursor:pointer;c
 [hidden]{display:none!important}
 .or{display:flex;align-items:center;gap:10px;color:var(--faint);font-size:13px;margin:14px 0}.or::before,.or::after{content:"";flex:1;height:1px;background:var(--stroke)}
 .gbtn{display:flex;align-items:center;justify-content:center;gap:10px;background:rgba(255,255,255,.92);color:#1f1f1f;border-color:rgba(255,255,255,.9)}
+
+/* v5: globe home */
+#globe{position:fixed;inset:0;z-index:0;display:none;background:radial-gradient(circle at 50% 40%,#0b1430,#02040a 70%)}
+body.home #globe{display:block}
+body.home .aurora{display:none}
+body.home main{position:relative;z-index:1;padding-top:calc(46vh + env(safe-area-inset-top));pointer-events:none}
+body.home main>*{pointer-events:auto}
+body.home header{background:linear-gradient(180deg,rgba(2,4,10,.7),rgba(2,4,10,0));-webkit-mask-image:none;mask-image:none;pointer-events:none}
+body.home header *{pointer-events:auto}
+body.home .hdr h1{text-shadow:0 2px 18px rgba(0,0,0,.6)}
+header{z-index:20}
+.homepanel{margin:0 -16px;padding:16px 16px 140px;min-height:62vh;border-radius:34px 34px 0 0;background:rgba(12,16,30,.74);-webkit-backdrop-filter:saturate(170%) blur(30px);backdrop-filter:saturate(170%) blur(30px);border:1px solid var(--stroke);border-bottom:0;box-shadow:0 -1px 0 rgba(255,255,255,.25) inset,0 -20px 50px rgba(0,0,0,.45)}
+.homepanel::before{content:"";display:block;width:40px;height:5px;border-radius:5px;background:rgba(255,255,255,.3);margin:-6px auto 12px}
+.homepanel .card.list{background:rgba(255,255,255,.05)}
+.maplibregl-ctrl-attrib{font-size:9px!important;background:rgba(0,0,0,.4)!important;color:#999!important}
+.maplibregl-ctrl-attrib a{color:#bbb!important}
+.maplibregl-ctrl-attrib-button{filter:invert(1);opacity:.5}
+body.home .maplibregl-ctrl-bottom-right{bottom:auto;top:calc(52px + env(safe-area-inset-top))}
+.gpin{display:flex;align-items:center;gap:0;font-weight:700;font-size:13px;transform:translateY(-1px);white-space:nowrap;pointer-events:none}
+.gpin i{width:12px;height:12px;border-radius:50%;background:#8fd0ff;border:2px solid #fff;box-shadow:0 0 10px #8fd0ff;margin-right:8px;flex:none}
+.gpin span{background:rgba(30,90,200,.92);padding:4px 8px;border-radius:8px 0 0 8px;color:#fff}
+.gpin b{background:rgba(12,40,110,.95);padding:4px 8px;border-radius:0 8px 8px 0;color:#fff}
+.gplane{color:#fff;filter:drop-shadow(0 0 8px rgba(126,240,220,.9))}
+.map.dmap{height:260px;background:#02040a}
+.map.nomap{display:none}
+.srcnote{font-size:13px;color:var(--mute);margin:10px 2px 0;line-height:1.45}
+.srcnote.warn{color:var(--warn)}.srcnote.ok{color:var(--good)}
+.link.inl{padding:0;font-size:13px;display:inline}
+.steps{padding-left:20px;margin:6px 0 12px}.steps li{margin-bottom:4px}
 </style>
 </head>
 <body>
+<div id="globe" aria-label="Map of your flights"></div>
 <div class="aurora" aria-hidden="true"><i></i><i></i><i></i><i></i></div>
 <header><div class="hdr"><h1 id="title">Flights</h1>
   <button class="icon-btn" id="hdrAction" aria-label="Add flight"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg></button>
@@ -248,7 +278,7 @@ button.plain{background:none;border:0;padding:0;text-align:left;cursor:pointer;c
 <input type="file" id="icsFile" accept=".ics,text/calendar" hidden>
 <input type="file" id="backupFile" accept=".json,application/json" hidden>
 <script src="airports.js"></script>
-<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" defer></script>
+<script src="https://unpkg.com/maplibre-gl@5/dist/maplibre-gl.js" defer></script>
 <script src="app.js"></script>
 </body>
 </html>
