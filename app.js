@@ -181,8 +181,11 @@ function extractFromText(text) {
 const depT = f => f.depEst || f.depSched;
 const arrT = f => f.arrEst || f.arrSched;
 function phase(f, now = Date.now()) {
+  if (f.override === 'canceled') return { key: 'cancel', label: 'Canceled', cls: 'bad', p: 0 };
+  if (f.override === 'returned') return { key: 'divert', label: `Returned to ${f.from?.iata || 'origin'}`, cls: 'bad', p: 1 };
+  if (f.override === 'landed') return now < arrT(f) ? { key: 'air', label: 'In the air', cls: 'air', p: Math.max(0, (now - depT(f)) / (arrT(f) - depT(f))) } : { key: 'landed', label: 'Landed', cls: 'ok', p: 1 };
   if (f.status && /cancel/i.test(f.status)) return { key: 'cancel', label: /uncertain/i.test(f.status) ? 'Probably canceled' : 'Canceled', cls: 'bad', p: 0 };
-  if (f.diverted || (f.status && /divert/i.test(f.status))) return { key: 'divert', label: f.divertedTo?.iata ? `Diverted to ${f.divertedTo.iata}` : 'Diverted', cls: 'bad', p: now > arrT(f) ? 1 : Math.max(0, Math.min(1, (now - depT(f)) / (arrT(f) - depT(f)))) };
+  if (f.override === 'diverted' || f.diverted || (f.status && /divert/i.test(f.status))) return { key: 'divert', label: f.divertedTo?.iata ? `Diverted to ${f.divertedTo.iata}` : 'Diverted', cls: 'bad', p: now > arrT(f) ? 1 : Math.max(0, Math.min(1, (now - depT(f)) / (arrT(f) - depT(f)))) };
   const d = depT(f), a = arrT(f);
   if (now < d - 45 * M) return { key: 'sched', label: delayMin(f) >= 15 ? `Delayed ${dur(delayMin(f) * M)}` : 'On time', cls: delayMin(f) >= 15 ? 'warn' : 'ok', p: 0 };
   if (now < d) return { key: 'board', label: 'Boarding', cls: 'warn', p: 0 };
@@ -304,7 +307,7 @@ function viewSettings() {
       <p class="muted small" style="margin:0">${liveProxy() ? '✓ Using your OpenSky server.' : 'Leave empty unless live position doesn’t show up.'}</p></div>
     <h2>Sync server</h2><div class="card">${syncServerHtml()}</div>
     <h2>Data</h2><div class="card"><div class="actions" style="margin:0"><button class="btn sm" data-act="backup">Download backup</button><button class="btn sm" data-act="restore">Restore backup</button><button class="btn sm danger" data-act="wipe">Delete all data</button></div></div>
-    <p class="muted small" style="text-align:center">Contrail · version 23</p>`;
+    <p class="muted small" style="text-align:center">Contrail · version 24</p>`;
 }
 
 // ---------- Sheets ----------
@@ -507,7 +510,7 @@ async function showRoutes(map, flights, focus, opts = {}) {
   const feats = [];
   flights.filter(f => f.from?.lat != null && f.to?.lat != null).forEach(f => {
     const line = gcLine(f.from, f.to, 96);
-    if (focus && f.id === focus.id && f.diverted && f.divertedTo?.lat != null && phase(f).key !== 'air') {
+    if (focus && f.id === focus.id && (f.diverted || f.override === 'diverted') && f.divertedTo?.lat != null && phase(f).key !== 'air') {
       feats.push(lineFeat(line, 'dim', f.id), lineFeat(gcLine(f.from, f.divertedTo, 64), 'done', f.id));
     } else if (focus && f.id === focus.id) {
       const ph = phase(f);
@@ -530,7 +533,7 @@ async function showRoutes(map, flights, focus, opts = {}) {
   map.getSource('routes').setData({ type: 'FeatureCollection', features: feats });
   map._focus = focus;
   if (focus && focus.from?.lat != null && focus.to?.lat != null) {
-    if (focus.diverted && focus.divertedTo?.lat != null && phase(focus).key !== 'air') focus = { ...focus, to: focus.divertedTo };
+    if ((focus.diverted || focus.override === 'diverted') && focus.divertedTo?.lat != null && phase(focus).key !== 'air') focus = { ...focus, to: focus.divertedTo };
     if (!opts.keepCamera) map[opts.ease ? 'easeTo' : 'jumpTo'](opts.follow && phase(focus).key === 'air' ? planeCam(map, focus, opts.padTop || 0, opts.padBottom || 0) : routeCam(map, focus, opts.padTop || 0, opts.padBottom || 0));
     placePins(map, focus);
   } else if (opts.airports) {
@@ -685,7 +688,7 @@ function viewStats() {
 function openFlight(id, src = 'flights') {
   const f = S[src].find(x => x.id === id); if (!f) return;
   const ph = phase(f), now = Date.now(), friend = src === 'friends', d = depT(f), a = arrT(f), plus = dayDiff(f), dl = delayMin(f);
-  const confirmed = f.arrActual || /arrived|landed/i.test(f.status || '');
+  const confirmed = f.override === 'landed' || f.arrActual || /arrived|landed/i.test(f.status || '');
   const status = ph.key === 'divert' ? (f.divertedTo?.iata ? `Diverted to ${cityOf(f.divertedTo)} (${esc(f.divertedTo.iata)})` : 'Diverted') : ph.key === 'cancel' ? ph.label
     : ph.key === 'air' ? `Lands in ${dur(a - now)}` : ph.key === 'landed' ? (confirmed ? `Landed ${fmtDate(a, f.to?.tz)}` : `Due to land ${fmtDate(a, f.to?.tz)}`) : `Departs in ${dur(d - now)}`;
   const sub2 = ph.key === 'divert' ? `Did not arrive at ${esc(f.to?.iata || '')}` : ph.key === 'cancel' ? 'This flight did not operate' : ph.key === 'landed' ? (!confirmed ? 'Not confirmed by live data' : dl >= 15 ? `Arrived ${dur(dl * M)} late` : 'Completed') : dl >= 15 ? `Delayed ${dur(dl * M)}` : f.status && !/unknown/i.test(f.status) ? esc(f.status) : f.estArr ? 'Arrival time is estimated — tap it to set' : f.updatedLive ? 'On time' : 'Scheduled';
@@ -709,7 +712,7 @@ function openFlight(id, src = 'flights') {
       ${tile('baggage', 'Baggage belt', f.baggage, '🧳')}${tile('aircraft', 'Aircraft', f.aircraft, '✈︎')}
     </div>
     ${tile('notes', 'Notes', f.notes, '📝').replace('class="tile"', 'class="tile wide"')}
-    <div class="srcline">${f.updatedLive ? `Live data from AeroDataBox${f.status ? ` · status “${esc(f.status)}”` : ''} · checked ${dur(Date.now() - (f.lastCheck || f.updatedLive))} ago` : 'Times from the schedule — not confirmed by live data'}${S.settings.apiKey ? ` · <button class="link inl" data-act="refresh-one" data-id="${f.id}" data-src="${src}">Check again</button>` : ''}</div>
+    <div class="srcline">${f.override ? `Outcome set by you · <button class="link inl" data-act="outcome" data-id="${f.id}" data-src="${src}">Change</button> · ` : f.statusSrc === 'aircraft' ? 'Diversion found from the aircraft’s own flight record · ' : ''}${f.updatedLive ? `Live data from AeroDataBox${f.status ? ` · status “${esc(f.status)}”` : ''} · checked ${dur(Date.now() - (f.lastCheck || f.updatedLive))} ago` : 'Times from the schedule — not confirmed by live data'}${S.settings.apiKey ? ` · <button class="link inl" data-act="refresh-one" data-id="${f.id}" data-src="${src}">Check again</button>` : ''}${!f.override && !friend ? ` · <button class="link inl" data-act="outcome" data-id="${f.id}" data-src="${src}">Something wrong? Correct what happened</button>` : ''}</div>
     <h2>Aircraft</h2><div class="card" id="acCard"></div>
     <h2>Delay history</h2><div class="card" id="dlCard"></div>
     <div class="actions">
@@ -723,7 +726,7 @@ function openFlight(id, src = 'flights') {
   attachDrag(el, vis => { el._vis = vis; const m = el._map; if (m && m._focus) { m.easeTo({ ...(phase(f).key === 'air' ? planeCam(m, f, 70, vis) : routeCam(m, f, 70, vis)), duration: 420 }); setTimeout(() => m._focus && placePins(m, f), 440); } });
   setTimeout(() => drawFlightMap(el, f), 30);
   fillFlightExtras(el, f);
-  if (S.settings.apiKey && !f.finalChecked && (f.finalTries || 0) < 3 && arrT(f) < Date.now() - H && arrT(f) > Date.now() - 30 * 864e5 && !el._checked) {
+  if (!f.override && S.settings.apiKey && (!f.finalChecked || f.checkV !== CHECK_V) && (f.finalTries || 0) < 4 && arrT(f) < Date.now() - H && arrT(f) > Date.now() - 30 * 864e5 && !el._checked) {
     el._checked = true; f.finalTries = (f.finalTries || 0) + 1;
     refreshFlight(f).then(ok => { save(); if (ok && el.isConnected) { render(); openFlight(id, src); } }).catch(() => {});
   }
@@ -780,6 +783,23 @@ function attachDrag(view, onSnap) {
   view._vis = d.vis();
 }
 const TILE_LABELS = { conf: 'Booking code', seat: 'Seat', baggage: 'Baggage belt', aircraft: 'Aircraft', notes: 'Notes', gateDep: 'Departure gate', gateArr: 'Arrival gate', arrTime: 'Arrival time' };
+function openOutcome(id, src) {
+  const f = S[src].find(x => x.id === id); if (!f) return;
+  sheet(`${sheetHd('What happened?')}<p class="muted small" style="margin-top:-6px">Your answer overrides the live data for ${esc(f.num)} on ${fmtDate(depT(f), f.from?.tz)}.</p>
+    <div class="oc-list">
+      <button class="tile" data-act="oc-set" data-v="landed" data-id="${id}" data-src="${src}"><b>Landed at ${esc(f.to?.iata)}</b><span class="muted">Flew as planned</span></button>
+      <div class="tile"><b>Diverted to another airport</b><div class="row" style="margin-top:8px"><input id="oc_ap" placeholder="Airport code, e.g. ATH" list="apList" maxlength="4" autocapitalize="characters" value="${esc(f.divertedTo?.iata || '')}"><button class="btn sm pri" style="flex:none" data-act="oc-set" data-v="diverted" data-id="${id}" data-src="${src}">Save</button></div></div>
+      <button class="tile" data-act="oc-set" data-v="returned" data-id="${id}" data-src="${src}"><b>Returned to ${esc(f.from?.iata)}</b><span class="muted">Turned back after take-off</span></button>
+      <button class="tile" data-act="oc-set" data-v="canceled" data-id="${id}" data-src="${src}"><b>Canceled</b><span class="muted">Didn’t operate</span></button>
+      ${f.override ? `<button class="btn block" data-act="oc-set" data-v="" data-id="${id}" data-src="${src}">Use live data again</button>` : ''}
+    </div>${airportOptions()}`);
+}
+function setOutcome(id, src, v) {
+  const f = S[src].find(x => x.id === id); if (!f) return;
+  if (v === 'diverted') { const ap = getAirport($('#oc_ap')?.value); if (!ap) return toast('Enter the airport code'); f.divertedTo = AP[ap.iata] ? { ...AP[ap.iata] } : ap; }
+  f.override = v || null; if (!v) { f.divertedTo = f.diverted ? f.divertedTo : null; }
+  f.updatedAt = Date.now(); save(); render(); openFlight(id, src); toast(v ? 'Saved' : 'Using live data');
+}
 function editTile(id, src, field) {
   const f = S[src].find(x => x.id === id); if (!f) return;
   let body;
@@ -1057,9 +1077,9 @@ function parseAdbAirport(x) {
     lat: a.location?.lat ?? known.lat, lon: a.location?.lon ?? known.lon, tz: a.timeZone || known.tz || DEVICE_TZ };
 }
 const adbTime = t => { const s = t?.utc; if (!s) return null; const v = Date.parse(s.replace(' ', 'T').replace(/Z?$/, 'Z')); return isNaN(v) ? null : v; };
-async function lookupFlight(num, date) {
+async function lookupFlight(num, date, by = 'number') {
   const key = S.settings.apiKey; if (!key) throw new Error('No API key');
-  const r = await fetch(`https://aerodatabox.p.rapidapi.com/flights/number/${encodeURIComponent(num)}/${date}?withAircraftImage=false&withLocation=true`, {
+  const r = await fetch(`https://aerodatabox.p.rapidapi.com/flights/${by}/${encodeURIComponent(num)}/${date}?withAircraftImage=false&withLocation=true`, {
     headers: { 'X-RapidAPI-Key': key, 'X-RapidAPI-Host': 'aerodatabox.p.rapidapi.com' } });
   if (r.status === 204 || r.status === 404) return null;
   if (!r.ok) throw new Error(`Lookup failed (${r.status})`);
@@ -1100,6 +1120,7 @@ async function testKey(btn) {
   catch (e) { toast(/40[13]/.test(e.message) ? 'Key not accepted — check you subscribed to the Basic plan' : e.message); }
   btn.disabled = false; btn.textContent = 'Test it';
 }
+const CHECK_V = 2; // bump to re-verify past flights with newer checks
 async function refreshFlight(f) {
   const res = await lookupFlight(f.num, localDate(f.depSched, f.from?.tz));
   f.lastCheck = Date.now();
@@ -1113,7 +1134,23 @@ async function refreshFlight(f) {
   f.diverted = !!isDiv; f.divertedTo = isDiv ? slimAp(m.to.iata !== toI ? m.to : sideLeg?.to || contLeg?.from || null) : null;
   f.depEst = m.depEst; f.arrEst = m.arrEst; f.depActual = m.depActual; f.arrActual = m.arrActual; f.status = m.status || f.status;
   ['terminalDep', 'gateDep', 'terminalArr', 'gateArr', 'baggage', 'aircraft', 'updatedLive', 'livePos', 'aircraftReg', 'aircraftModeS'].forEach(k => { if (m[k]) f[k] = m[k]; });
-  if (arrT(f) < Date.now() - H && (/arrived|landed|divert|cancel/i.test(f.status || '') || f.arrActual)) f.finalChecked = true;
+  if (arrT(f) < Date.now() - H) {
+    // Second opinion: what did this aircraft actually fly that day?
+    const reg = f.aircraftReg || m.aircraftReg;
+    if (reg && !f.diverted) {
+      try {
+        const legs = (await lookupFlight(reg, localDate(f.depSched, f.from?.tz), 'reg')) || [];
+        const mine = legs.filter(l => l.from.iata === fromI && Math.abs(l.depSched - f.depSched) < 6 * H);
+        const toDest = mine.find(l => l.to.iata === toI), elsewhere = mine.find(l => l.to.iata !== toI);
+        if (elsewhere && (!toDest || /divert/i.test(toDest.status || '') || (elsewhere.arrActual && !toDest.arrActual))) {
+          f.diverted = true; f.divertedTo = slimAp(elsewhere.to); f.status = 'Diverted'; f.statusSrc = 'aircraft';
+        }
+        f.crossChecked = true;
+      } catch (e) {}
+    }
+    f.checkV = CHECK_V;
+    if (/arrived|landed|divert|cancel/i.test(f.status || '') || f.arrActual) f.finalChecked = true;
+  }
   if (f.from && !f.from.lat) f.from = m.from; if (f.to && !f.to.lat) f.to = m.to;
   f.updatedAt = Date.now();
   return true;
@@ -1577,6 +1614,8 @@ document.addEventListener('click', async e => {
     case 'af-leg': { const l = AF.route.legs[+t.dataset.i]; AF.route = { ...l, full: true, legs: AF.route.legs }; afBody(); break; }
     case 'sort': pastSort = t.dataset.k; render(); break;
     case 'tile': editTile(id, src, t.dataset.field); break;
+    case 'outcome': openOutcome(id, src); break;
+    case 'oc-set': setOutcome(id, src, t.dataset.v); break;
     case 'tile-save': saveTile(id, src, t.dataset.field); break;
     case 'edit': closeSheet(); openEditor(id); break;
     case 'save-flight': saveFromEditor(id); break;
