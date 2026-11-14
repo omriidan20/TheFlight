@@ -1,0 +1,32 @@
+rules_version = '2';
+// Contrail security rules: Google sign-in only, admin approves members, admin-only system settings.
+// Replace YOUR_GOOGLE_EMAIL with the Google account email of the admin.
+service cloud.firestore {
+  match /databases/{database}/documents {
+    function signedIn() { return request.auth != null; }
+    function isGoogle() { return signedIn() && request.auth.token.firebase.sign_in_provider == 'google.com'; }
+    function isAdmin()  { return isGoogle() && request.auth.token.email == 'YOUR_GOOGLE_EMAIL' && request.auth.token.email_verified == true; }
+    function isMember() {
+      return isAdmin() || (isGoogle()
+        && exists(/databases/$(database)/documents/members/$(request.auth.uid))
+        && get(/databases/$(database)/documents/members/$(request.auth.uid)).data.status == 'approved');
+    }
+
+    // System settings (live-data keys): approved members can read, only the admin can change
+    match /config/{doc} {
+      allow read: if isMember();
+      allow write: if isAdmin();
+    }
+    // Access requests: a person may request access for themselves; only the admin approves
+    match /members/{uid} {
+      allow get: if signedIn() && (request.auth.uid == uid || isAdmin());
+      allow list: if isAdmin();
+      allow create: if isGoogle() && request.auth.uid == uid && request.resource.data.status == 'pending';
+      allow update, delete: if isAdmin();
+    }
+    // Each member's own flights
+    match /users/{uid} {
+      allow read, write: if request.auth.uid == uid && isMember();
+    }
+  }
+}

@@ -15,6 +15,7 @@ const S = { flights: [], friends: [], settings: { ...DEFAULTS } };
 let tab = 'flights', sub = 'upcoming';
 let fb = null, user = null, pushTimer = null, account = null, pendingShare = null;
 const H = 3600e3, M = 60e3;
+let SYS = { adbKey: '', liveProxy: '' }, isAdmin = false, gate = null, authMsg = '';
 const readJSON = (k, d) => { try { return JSON.parse(localStorage.getItem(k)) ?? d; } catch (e) { return d; } };
 const CFG = readJSON(CFG_KEY, {});
 (() => { const old = readJSON(LEGACY_KEY, null); if (old?.settings?.fbConfig && !CFG.fbConfig) { CFG.fbConfig = old.settings.fbConfig; localStorage.setItem(CFG_KEY, JSON.stringify(CFG)); } })();
@@ -110,7 +111,7 @@ function getAirport(code) {
 const hue = s => { let h = 0; for (const c of String(s)) h = (h * 31 + c.charCodeAt(0)) % 360; return h; };
 const LOGO_URL = code => `https://pics.avs.io/128/128/${encodeURIComponent(code)}.png`;
 const logo = (code, lg) => /^[A-Z0-9]{2}$/.test(code || '') ? `<span class="alogo${lg ? ' lg' : ''}">${badge(code, lg)}<img src="${LOGO_URL(code)}" alt="" loading="lazy" referrerpolicy="no-referrer" onload="if(this.naturalWidth<8)this.remove();else this.parentNode.classList.add('ok')" onerror="this.remove()"></span>` : badge(code, lg);
-const badge = (code, lg) => `<span class="badge${lg ? ' lg' : ''}" style="background:linear-gradient(145deg,hsl(${hue(code)} 70% 58%),hsl(${(hue(code) + 40) % 360} 65% 38%))">${esc(code || '?')}</span>`;
+const badge = (code, lg) => `<span class="badge${lg ? ' lg' : ''}" style="background:linear-gradient(145deg,hsl(${hue(code)} 28% 50%),hsl(${(hue(code) + 30) % 360} 25% 34%))">${esc(code || '?')}</span>`;
 const ALIASES = (() => {
   const m = new Map(Object.entries(AIRLINE_ALIASES));
   Object.entries(AIRLINES).forEach(([c, n]) => {
@@ -235,7 +236,7 @@ function renderTabs() {
 }
 const TITLES = { flights: 'Flights', friends: 'Friends', stats: 'Passport', settings: 'Settings' };
 const initials = n => (n || '?').trim().split(/[\s._-]+/).map(w => w[0]).join('').slice(0, 2).toUpperCase();
-const avatarStyle = n => `background:linear-gradient(145deg,hsl(${hue(n)} 70% 60%),hsl(${(hue(n) + 60) % 360} 70% 40%))`;
+const avatarStyle = n => `background:linear-gradient(145deg,hsl(${hue(n)} 30% 52%),hsl(${(hue(n) + 40) % 360} 28% 36%))`;
 function render() {
   if (!account) return renderAuth();
   renderTabs();
@@ -249,7 +250,7 @@ function render() {
   if (tab === 'flights') { renderHome(m, viewFlights); updateHomeGlobe(); setTimeout(maybeInstallBanner, 1500); }
   else if (tab === 'stats') { renderHome(m, viewStats); updateHomeGlobe(); }
   else if (tab === 'friends') m.innerHTML = viewFriends();
-  else m.innerHTML = viewSettings();
+  else { m.innerHTML = viewSettings(); fillAdmin(); }
 }
 function viewFriends() {
   const now = Date.now(), fr = live(S.friends).sort((a, b) => {
@@ -286,8 +287,8 @@ function computeStats(year) {
 function viewSettings() {
   const st = S.settings;
   const acct = `<div style="display:flex;gap:14px;align-items:center"><div class="avatar lg" style="${avatarStyle(account.username)}">${esc(initials(account.username))}</div>
-      <div style="flex:1;min-width:0"><b style="font-size:18px">${esc(account.username)}</b><div class="muted small">${account.mode === 'cloud' ? (account.google ? '☁︎ Google account · synced' : '☁︎ Synced account') : 'Account on this device'}</div></div></div>
-    <div class="actions" style="margin-bottom:0">${account.google ? '' : '<button class="btn sm" data-act="change-pw">Change password</button>'}<button class="btn sm" data-act="signout">Sign out</button><button class="btn sm danger" data-act="delete-account">Delete account</button></div>`;
+      <div style="flex:1;min-width:0"><b style="font-size:18px">${esc(account.username)}</b><div class="muted small">${esc(user?.email || '')}${isAdmin ? ' · Admin' : ''}</div></div></div>
+    <div class="actions" style="margin-bottom:0"><button class="btn sm" data-act="signout">Sign out</button><button class="btn sm danger" data-act="delete-account">Delete account</button></div>`;
   const inst = isStandalone() ? '' : `<h2>App</h2><div class="card"><div style="display:flex;gap:14px;align-items:center"><img src="apple-touch-icon.png" alt="" style="width:52px;height:52px;border-radius:12px"><div style="flex:1"><b>Install Contrail</b><div class="muted small">Add it to your Home Screen to open it full screen, like a regular app.</div></div></div><button class="btn pri block" style="margin-top:12px" data-act="install">${deferredInstall ? 'Install app' : 'Show me how'}</button></div>`;
   return `${inst}<h2>Account</h2><div class="card">${acct}</div>
     <h2>Profile</h2><div class="card"><label class="f"><span>Your name (shown when you share flights)</span><input id="setName" value="${esc(st.name)}" placeholder="e.g. Omri"></label>
@@ -296,18 +297,15 @@ function viewSettings() {
       <p class="muted small" style="margin-bottom:0">Export a calendar file from Google Calendar, Apple Calendar, Outlook or TripIt and import it — Contrail finds the flights automatically.</p></div>
     <h2>Notifications</h2><div class="card"><button class="btn" data-act="notify">${st.notify && 'Notification' in window && Notification.permission === 'granted' ? '✓ Reminders on' : 'Turn on departure reminders'}</button>
       <p class="muted small" style="margin-bottom:0">Reminders 3 hours and 45 minutes before departure, and when you land, while Contrail is open or installed.</p></div>
-    <h2>Live flight data</h2><div class="card" id="liveCard">
-      <p class="small" style="margin-top:0">${st.apiKey ? '✓ <b>Live data is on.</b> Times, gates, terminals, delays and aircraft fill in automatically and update every 10 minutes.' : 'Turn this on to get exact <b>times, gates, terminals, delays and aircraft</b> automatically. It’s free for personal use (AeroDataBox free plan).'}</p>
-      ${st.apiKey ? '' : `<ol class="small muted steps"><li>Open <a href="https://rapidapi.com/aedbx-aedbx/api/aerodatabox/pricing" target="_blank" rel="noopener">AeroDataBox on RapidAPI</a> and sign up (free).</li><li>Choose the <b>Basic</b> plan ($0) and tap <b>Subscribe</b>.</li><li>Open the <b>Endpoints</b> tab and copy the <b>X-RapidAPI-Key</b> value.</li><li>Paste it below.</li></ol>`}
-      <label class="f"><span>API key</span><input id="setKey" value="${esc(st.apiKey)}" placeholder="Paste your X-RapidAPI-Key" autocomplete="off" autocapitalize="none" spellcheck="false"></label>
-      <button class="btn sm" data-act="test-key">Test it</button>
-      <p class="muted small">Your key is saved to your account only, so it works on all your devices.</p>
-      <p class="small" style="margin:16px 0 6px"><b>Live plane position</b> works automatically using free community flight-tracking networks (adsb.lol, airplanes.live, adsb.fi). Nothing to set up.</p>
-      <label class="f"><span>Optional backup server (OpenSky worker)</span><input id="setLive" value="${esc(st.liveProxy || '')}" placeholder="https://contrail-live.you.workers.dev" autocomplete="off" autocapitalize="none" spellcheck="false"></label>
-      <p class="muted small" style="margin:0">${liveProxy() ? '✓ Using your OpenSky server.' : 'Leave empty unless live position doesn’t show up.'}</p></div>
-    <h2>Sync server</h2><div class="card">${syncServerHtml()}</div>
+    <h2>Live flight data</h2><div class="card"><p class="small" style="margin:0">${SYS.adbKey ? '✓ <b>On.</b> Times, gates, delays and aircraft update automatically.' : 'Off. The admin hasn’t set up live data yet.'}</p><p class="muted small" style="margin:6px 0 0">Managed by the admin for everyone.</p></div>
+    ${isAdmin ? `<h2>Admin</h2><div class="card" id="adminCard"><div class="muted small">Loading members…</div></div>
+    <h2>System settings</h2><div class="card">
+      <label class="f"><span>AeroDataBox key (RapidAPI)</span><div class="pw"><input id="sysKey" type="password" value="${esc(SYS.adbKey || '')}" autocomplete="off" autocapitalize="none" spellcheck="false"><button type="button" data-act="sys-show">Show</button></div></label>
+      <label class="f"><span>Live position server (optional)</span><input id="sysLive" value="${esc(SYS.liveProxy || '')}" placeholder="https://contrail-live.you.workers.dev" autocomplete="off" autocapitalize="none" spellcheck="false"></label>
+      <div class="actions" style="margin:0"><button class="btn pri sm" data-act="sys-save">Save for everyone</button><button class="btn sm" data-act="test-key">Test key</button></div>
+      <p class="muted small" style="margin-bottom:0">Only you can see or change these. Every member uses them.</p></div>` : ''}
     <h2>Data</h2><div class="card"><div class="actions" style="margin:0"><button class="btn sm" data-act="backup">Download backup</button><button class="btn sm" data-act="restore">Restore backup</button><button class="btn sm danger" data-act="wipe">Delete all data</button></div></div>
-    <p class="muted small" style="text-align:center">Contrail · version 25</p>`;
+    <p class="muted small" style="text-align:center">Contrail · version 26</p>`;
 }
 
 // ---------- Sheets ----------
@@ -325,7 +323,7 @@ const sheetHd = title => `<div class="hd"><h3>${title}</h3><button class="icon-b
 
 // ---------- Live plane position (OpenSky via proxy) ----------
 const LIVE_PROXY_DEFAULT = '';
-const liveProxy = () => (S.settings.liveProxy || LIVE_PROXY_DEFAULT).replace(/\/+$/, '');
+const liveProxy = () => (SYS.liveProxy || LIVE_PROXY_DEFAULT).replace(/\/+$/, '');
 const AIRLINE_ICAO_REV = Object.fromEntries(Object.entries(AIRLINE_ICAO).map(([i, a]) => [a, i]));
 const icaoCallsign = num => { const c = num.slice(0, 2), ic = AIRLINE_ICAO_REV[c]; return ic ? ic + num.slice(2) : num; };
 const liveFresh = f => f.livePos && Date.now() - f.livePos.t < 20 * M;
@@ -420,8 +418,8 @@ async function dayNightTile(z, x, y, t, signal) {
       const lat = Math.atan(Math.sinh(Math.PI * (1 - 2 * (y + (py + 0.5) / 256) / n))), a = Math.sin(lat) * sinD, b = Math.cos(lat) * cosD;
       for (let px = 0; px < 256; px++) {
         let k = (a + b * cosH[px] + 0.09) / 0.18; k = k <= 0 ? 0 : k >= 1 ? 1 : k * k * (3 - 2 * k); // twilight band
-        const i = (py * 256 + px) * 4, dm = 0.8 * k, nm = 1 - k;
-        o[i] = o[i] * dm + nd[i] * nm; o[i + 1] = o[i + 1] * dm + nd[i + 1] * nm; o[i + 2] = o[i + 2] * dm + nd[i + 2] * nm;
+        const i = (py * 256 + px) * 4, dm = 0.78 * k, nm = 1 - k, ng = 0.2 * nm; // night = city lights + faint, cool-tinted ground
+        o[i] = o[i] * (dm + ng * 0.7) + nd[i] * nm; o[i + 1] = o[i + 1] * (dm + ng * 0.85) + nd[i + 1] * nm; o[i + 2] = o[i + 2] * (dm + ng * 1.15) + nd[i + 2] * nm;
       }
     }
     g.putImageData(D, 0, 0);
@@ -455,10 +453,10 @@ function makeGlobe(box, { interactive = true, center = [10, 30], zoom = 1.2 } = 
   map._ready = new Promise(res => map.on('load', () => {
     map.resize();
     map.addSource('routes', { type: 'geojson', data: { type: 'FeatureCollection', features: [] } });
-    map.addLayer({ id: 'routes-glow', type: 'line', source: 'routes', filter: ['==', ['get', 'kind'], 'main'], paint: { 'line-color': '#7cc4ff', 'line-width': 9, 'line-opacity': 0.18, 'line-blur': 4 }, layout: { 'line-cap': 'round' } });
-    map.addLayer({ id: 'routes-dim', type: 'line', source: 'routes', filter: ['==', ['get', 'kind'], 'dim'], paint: { 'line-color': '#7ef0dc', 'line-width': 1.4, 'line-opacity': 0.55 }, layout: { 'line-cap': 'round' } });
-    map.addLayer({ id: 'routes-main', type: 'line', source: 'routes', filter: ['==', ['get', 'kind'], 'main'], paint: { 'line-color': '#8fd0ff', 'line-width': 2.8 }, layout: { 'line-cap': 'round' } });
-    map.addLayer({ id: 'routes-done', type: 'line', source: 'routes', filter: ['==', ['get', 'kind'], 'done'], paint: { 'line-color': '#7ef0dc', 'line-width': 3.2 }, layout: { 'line-cap': 'round' } });
+    map.addLayer({ id: 'routes-glow', type: 'line', source: 'routes', filter: ['==', ['get', 'kind'], 'main'], paint: { 'line-color': '#9fb3d1', 'line-width': 8, 'line-opacity': 0.14, 'line-blur': 4 }, layout: { 'line-cap': 'round' } });
+    map.addLayer({ id: 'routes-dim', type: 'line', source: 'routes', filter: ['==', ['get', 'kind'], 'dim'], paint: { 'line-color': '#a8c8bf', 'line-width': 1.5, 'line-opacity': 0.6 }, layout: { 'line-cap': 'round' } });
+    map.addLayer({ id: 'routes-main', type: 'line', source: 'routes', filter: ['==', ['get', 'kind'], 'main'], paint: { 'line-color': '#b3c4de', 'line-width': 2.6 }, layout: { 'line-cap': 'round' } });
+    map.addLayer({ id: 'routes-done', type: 'line', source: 'routes', filter: ['==', ['get', 'kind'], 'done'], paint: { 'line-color': '#a8d0c4', 'line-width': 3 }, layout: { 'line-cap': 'round' } });
     res(map);
   }));
   return map;
@@ -601,7 +599,7 @@ function viewFlights() {
       <div class="actions" style="justify-content:center"><button class="btn pri" data-act="add">Add a flight</button><button class="btn" data-act="import-ics">Import from calendar</button></div></div>`;
   } else {
     html += `<div class="card list">${list.map(f => rowItem(f)).join('')}</div>`;
-    html += `<div class="actions"><button class="btn sm" data-act="import-ics">📅 Import from calendar</button>${S.settings.apiKey ? '<button class="btn sm" data-act="refresh-all">↻ Refresh live data</button>' : ''}</div>`;
+    html += `<div class="actions"><button class="btn sm" data-act="import-ics">📅 Import from calendar</button>${SYS.adbKey ? '<button class="btn sm" data-act="refresh-all">↻ Refresh live data</button>' : ''}</div>`;
   }
   return html;
 }
@@ -716,21 +714,21 @@ function openFlight(id, src = 'flights') {
       ${tile('baggage', 'Baggage belt', f.baggage, '🧳')}${tile('aircraft', 'Aircraft', f.aircraft, '✈︎')}
     </div>
     ${tile('notes', 'Notes', f.notes, '📝').replace('class="tile"', 'class="tile wide"')}
-    <div class="srcline">${f.override ? `Outcome set by you · <button class="link inl" data-act="outcome" data-id="${f.id}" data-src="${src}">Change</button> · ` : f.statusSrc === 'aircraft' ? 'Diversion found from the aircraft’s own flight record · ' : ''}${f.updatedLive ? `Live data from AeroDataBox${f.status ? ` · status “${esc(f.status)}”` : ''} · checked ${dur(Date.now() - (f.lastCheck || f.updatedLive))} ago` : 'Times from the schedule — not confirmed by live data'}${S.settings.apiKey ? ` · <button class="link inl" data-act="refresh-one" data-id="${f.id}" data-src="${src}">Check again</button>` : ''}${!f.override && !friend ? ` · <button class="link inl" data-act="outcome" data-id="${f.id}" data-src="${src}">Something wrong? Correct what happened</button>` : ''}</div>
+    <div class="srcline">${f.override ? `Outcome set by you · <button class="link inl" data-act="outcome" data-id="${f.id}" data-src="${src}">Change</button> · ` : f.statusSrc === 'aircraft' ? 'Diversion found from the aircraft’s own flight record · ' : ''}${f.updatedLive ? `Live data from AeroDataBox${f.status ? ` · status “${esc(f.status)}”` : ''} · checked ${dur(Date.now() - (f.lastCheck || f.updatedLive))} ago` : 'Times from the schedule — not confirmed by live data'}${SYS.adbKey ? ` · <button class="link inl" data-act="refresh-one" data-id="${f.id}" data-src="${src}">Check again</button>` : ''}${!f.override && !friend ? ` · <button class="link inl" data-act="outcome" data-id="${f.id}" data-src="${src}">Something wrong? Correct what happened</button>` : ''}</div>
     <h2>Aircraft</h2><div class="card" id="acCard"></div>
     <h2>Delay history</h2><div class="card" id="dlCard"></div>
     <div class="actions">
       ${!friend ? `<button class="btn pri sm" data-act="share-one" data-id="${f.id}">Share</button>` : `<button class="btn sm" data-act="copy-friend" data-id="${f.id}">I'm on this flight too</button>`}
       <button class="btn sm" data-act="ics-one" data-id="${f.id}" data-src="${src}">Add to calendar</button>
       ${!friend ? `<button class="btn sm" data-act="edit" data-id="${f.id}">Edit route & times</button>` : ''}
-      ${S.settings.apiKey ? `<button class="btn sm" data-act="refresh-one" data-id="${f.id}" data-src="${src}">↻ Refresh</button>` : ''}
+      ${SYS.adbKey ? `<button class="btn sm" data-act="refresh-one" data-id="${f.id}" data-src="${src}">↻ Refresh</button>` : ''}
       <button class="btn sm danger" data-act="delete" data-id="${f.id}" data-src="${src}">Delete</button>
     </div></div></div>`;
   document.body.appendChild(el); document.body.style.overflow = 'hidden';
   attachDrag(el, vis => { el._vis = vis; const m = el._map; if (m && m._focus) { m.easeTo({ ...(phase(f).key === 'air' ? planeCam(m, f, 70, vis) : routeCam(m, f, 70, vis)), duration: 420 }); setTimeout(() => m._focus && placePins(m, f), 440); } });
   setTimeout(() => drawFlightMap(el, f), 30);
   fillFlightExtras(el, f);
-  if (!f.override && S.settings.apiKey && (!f.finalChecked || f.checkV !== CHECK_V) && (f.finalTries || 0) < 4 && arrT(f) < Date.now() - H && arrT(f) > Date.now() - 30 * 864e5 && !el._checked) {
+  if (!f.override && SYS.adbKey && (!f.finalChecked || f.checkV !== CHECK_V) && (f.finalTries || 0) < 4 && arrT(f) < Date.now() - H && arrT(f) > Date.now() - 30 * 864e5 && !el._checked) {
     el._checked = true; f.finalTries = (f.finalTries || 0) + 1;
     refreshFlight(f).then(ok => { save(); if (ok && el.isConnected) { render(); openFlight(id, src); } }).catch(() => {});
   }
@@ -882,7 +880,7 @@ async function afSearch(key) {
   AF.movedFrom = null; AF.searching = null;
   const p = AF.p; let r = null;
   AF.live = null; AF.dates = null;
-  if (S.settings.apiKey) {
+  if (SYS.adbKey) {
     try { const res = await lookupFlight(p.num, AF.date); if (res?.length) r = { ...res[0], full: true, legs: res }; else AF.live = 'noflight'; }
     catch (e) { const c = +(e.message.match(/\((\d+)\)/) || [])[1]; AF.live = c === 401 || c === 403 ? 'rejected' : c === 429 ? 'quota' : 'error'; AF.liveMsg = e.message; }
     if (AF.live === 'noflight') {
@@ -900,7 +898,7 @@ async function afSearch(key) {
   }
   if (!r && AF.pre?.from && AF.pre?.to && (!AF.pre.num || parseFlight(AF.pre.num)?.num === p.num)) r = { from: getAirport(AF.pre.from), to: getAirport(AF.pre.to) };
   if (!r) { const mine = live(S.flights).filter(f => f.num === p.num && f.from?.iata && f.to?.iata && f.source !== 'route' && f.routeSrc !== 'public').sort((a, b) => depT(b) - depT(a))[0]; if (mine) r = { from: mine.from, to: mine.to, src: 'history' }; }
-  if (!r && !(S.settings.apiKey && AF.live === 'noflight')) { const fr = await freeRoute(p.num); if (fr) r = { ...fr, src: 'public' }; }
+  if (!r && !(SYS.adbKey && AF.live === 'noflight')) { const fr = await freeRoute(p.num); if (fr) r = { ...fr, src: 'public' }; }
   if (!AF || AF.key !== key) return;
   AF.route = r; AF.state = r ? 'found' : 'manual'; afBody();
 }
@@ -923,7 +921,7 @@ function afBody() {
       <div class="ap right"><div class="code">${esc(r.to.iata)}</div><div class="city" style="margin-left:auto">${cityOf(r.to)}</div>${r.full ? rTime(r, 'arr') : ''}</div></div>
     ${AF.live === 'moved' ? liveNote() : ''}${r.full ? `<div class="srcnote ok">✓ Live schedule${r.status ? ' · ' + esc(r.status) : ''}${r.gateDep ? ' · Gate ' + esc(r.gateDep) : ''}${r.terminalDep ? ' · Terminal ' + esc(r.terminalDep) : ''}</div>`
       : r.src === 'history' ? `<div class="srcnote">Route from your previous ${esc(AF.p.num)} flight · <button class="link inl" data-act="af-change">Change</button></div>`
-      : `${liveNote()}<div class="srcnote warn">⚠︎ Route from a public database and may be outdated — check it. <button class="link inl" data-act="af-change">Change airports</button>${S.settings.apiKey ? '' : '<br>For exact times, gates and delays, <button class="link inl" data-act="goto-live">turn on live data</button> (free).'}</div>`}
+      : `${liveNote()}<div class="srcnote warn">⚠︎ Route from a public database and may be outdated — check it. <button class="link inl" data-act="af-change">Change airports</button>${SYS.adbKey ? '' : '<br>For exact times, gates and delays, <button class="link inl" data-act="goto-live">turn on live data</button> (free).'}</div>`}
     ${r.full ? '' : afTimes(r.from, r.to)}
     <button class="btn pri block" data-act="af-add" style="margin-top:12px">Add flight</button></div>`;
 }
@@ -942,7 +940,7 @@ function liveNote() {
 async function flightDates(num, date) {
   try {
     const from = date, to = localDate(zonedToUtc(date, '12:00', DEVICE_TZ) + 20 * 864e5, DEVICE_TZ);
-    const r = await fetch(`https://aerodatabox.p.rapidapi.com/flights/number/${encodeURIComponent(num)}/dates/${from}/${to}`, { headers: { 'X-RapidAPI-Key': S.settings.apiKey, 'X-RapidAPI-Host': 'aerodatabox.p.rapidapi.com' } });
+    const r = await fetch(`https://aerodatabox.p.rapidapi.com/flights/number/${encodeURIComponent(num)}/dates/${from}/${to}`, { headers: { 'X-RapidAPI-Key': SYS.adbKey, 'X-RapidAPI-Host': 'aerodatabox.p.rapidapi.com' } });
     if (!r.ok) return null;
     const j = await r.json(); const arr = Array.isArray(j) ? j : j.items || j.dates || [];
     return [...new Set(arr.map(x => String(typeof x === 'string' ? x : x.date || x.dateLocal || x.scheduledDateLocal || '').slice(0, 10)).filter(x => /^\d{4}-\d\d-\d\d$/.test(x) && x !== date))].sort();
@@ -992,7 +990,7 @@ function openEditor(id, prefill = {}) {
     <div class="row">${inp('num', 'Flight number or airline', 'LY8 · ELY8 · El Al 8')}${inp('date', 'Date', '', 'date')}</div>
     <div class="detect-slot" id="editChip">${detectChip(parseFlight(v.num))}</div>
     ${f ? '' : `<button class="btn sm" style="margin:-2px 0 12px" data-act="smart-paste">📋 Paste from email or message</button>`}
-    ${S.settings.apiKey ? `<div id="lookupStatus" class="muted small" style="margin:-4px 4px 10px">Route and times fill in automatically once the flight number and date are set.</div>` : `<p class="muted small" style="margin:-4px 4px 12px">Add a free live-data key in Settings and the route, times, gates and aircraft fill in automatically.</p>`}
+    ${SYS.adbKey ? `<div id="lookupStatus" class="muted small" style="margin:-4px 4px 10px">Route and times fill in automatically once the flight number and date are set.</div>` : `<p class="muted small" style="margin:-4px 4px 12px">Add a free live-data key in Settings and the route, times, gates and aircraft fill in automatically.</p>`}
     <div class="row">${inp('from', 'From (airport code)', 'JFK')}${inp('to', 'To', 'TLV')}</div>
     <div class="row">${inp('dep', 'Departs (local time)', '', 'time')}${inp('arr', 'Arrives (local time)', '', 'time')}</div>
     ${inp('arrDate', 'Arrival date (if different)', '', 'date')}
@@ -1014,7 +1012,7 @@ function fillEditor(o) {
 let lookupTimer = null;
 function scheduleAutoLookup() {
   clearTimeout(lookupTimer);
-  if (!S.settings.apiKey) return;
+  if (!SYS.adbKey) return;
   const p = parseFlight(ev('num')), date = ev('date');
   if (!p || p.partial || !date) return;
   lookupTimer = setTimeout(async () => {
@@ -1082,7 +1080,7 @@ function parseAdbAirport(x) {
 }
 const adbTime = t => { const s = t?.utc; if (!s) return null; const v = Date.parse(s.replace(' ', 'T').replace(/Z?$/, 'Z')); return isNaN(v) ? null : v; };
 async function lookupFlight(num, date, by = 'number') {
-  const key = S.settings.apiKey; if (!key) throw new Error('No API key');
+  const key = SYS.adbKey; if (!key) throw new Error('No API key');
   const r = await fetch(`https://aerodatabox.p.rapidapi.com/flights/${by}/${encodeURIComponent(num)}/${date}?withAircraftImage=false&withLocation=true`, {
     headers: { 'X-RapidAPI-Key': key, 'X-RapidAPI-Host': 'aerodatabox.p.rapidapi.com' } });
   if (r.status === 204 || r.status === 404) return null;
@@ -1117,12 +1115,12 @@ async function doLookup() {
   } catch (e) { toast(e.message); } finally { btn.disabled = false; btn.textContent = 'Look up flight'; }
 }
 async function testKey(btn) {
-  const k = ($('#setKey')?.value || '').trim(); if (!k) return toast('Paste your key first');
-  S.settings.apiKey = k; save();
+  const k = ($('#sysKey')?.value || '').trim(); if (!k) return toast('Paste the key first');
+  const prev = SYS.adbKey; SYS.adbKey = k;
   btn.disabled = true; btn.textContent = 'Testing…';
   try { const r = await lookupFlight('LY8', localDate(Date.now() + 864e5, DEVICE_TZ)); toast(r && r.length ? `✓ Works — LY8 ${r[0].from.iata} → ${r[0].to.iata}` : '✓ Key works'); render(); }
   catch (e) { toast(/40[13]/.test(e.message) ? 'Key not accepted — check you subscribed to the Basic plan' : e.message); }
-  btn.disabled = false; btn.textContent = 'Test it';
+  SYS.adbKey = prev; btn.disabled = false; btn.textContent = 'Test key';
 }
 const CHECK_V = 2; // bump to re-verify past flights with newer checks
 async function refreshFlight(f) {
@@ -1160,7 +1158,7 @@ async function refreshFlight(f) {
   return true;
 }
 async function refreshAll(force) {
-  if (!S.settings.apiKey) return;
+  if (!SYS.adbKey) return;
   const now = Date.now();
   const every = f => (now > depT(f) - 3 * H && now < arrT(f) + 30 * M) ? 15 * M : 6 * H;
   const due = [...live(S.flights), ...live(S.friends)].filter(f => (depT(f) - now < 36 * H && arrT(f) > now - 1 * H && (force || !f.updatedLive || now - f.updatedLive > every(f)))
@@ -1174,21 +1172,21 @@ async function refreshAll(force) {
 
 // ---------- Aircraft details & delay history ----------
 const adbGet = async path => {
-  const r = await fetch('https://aerodatabox.p.rapidapi.com' + path, { headers: { 'X-RapidAPI-Key': S.settings.apiKey, 'X-RapidAPI-Host': 'aerodatabox.p.rapidapi.com' } });
+  const r = await fetch('https://aerodatabox.p.rapidapi.com' + path, { headers: { 'X-RapidAPI-Key': SYS.adbKey, 'X-RapidAPI-Host': 'aerodatabox.p.rapidapi.com' } });
   if (r.status === 204 || r.status === 404) return null; if (!r.ok) throw new Error(`(${r.status})`); return r.json();
 };
 const cacheGet = (k, maxAge) => { const c = readJSON(k, null); return c && Date.now() - c.t < maxAge ? c : null; };
 const cacheSet = (k, d) => { try { localStorage.setItem(k, JSON.stringify({ t: Date.now(), d })); } catch (e) {} };
 async function aircraftInfo(reg) {
   const k = 'contrail.ac.' + reg, c = cacheGet(k, 30 * 864e5); if (c) return c.d;
-  if (!S.settings.apiKey) return null;
+  if (!SYS.adbKey) return null;
   const d = await adbGet(`/aircrafts/reg/${encodeURIComponent(reg)}`); cacheSet(k, d); return d;
 }
 const tsMin = v => { if (typeof v === 'number') return v; if (typeof v !== 'string') return null; const neg = v.trim().startsWith('-'); const m = v.replace('-', '').match(/^(?:(\d+)\.)?(\d+):(\d+)(?::(\d+))?/); if (!m) return null; const t = (+(m[1] || 0)) * 1440 + (+m[2]) * 60 + (+m[3]) + (+(m[4] || 0)) / 60; return neg ? -t : t; };
 const pctValues = c => (c?.delayPercentiles || []).map(x => x == null ? null : typeof x === 'object' ? tsMin(x.delay ?? x.value ?? x.minutes ?? x.delayMinutes) : tsMin(x)).filter(v => v != null && isFinite(v));
 async function delayStats(num) {
   const k = 'contrail.dl.' + num, c = cacheGet(k, 7 * 864e5); if (c) return c.d;
-  if (!S.settings.apiKey) return null;
+  if (!SYS.adbKey) return null;
   let d = null;
   for (const p of [`/flights/${encodeURIComponent(num)}/delays`, `/flights/number/${encodeURIComponent(num)}/delays`]) { try { d = await adbGet(p); if (d) break; } catch (e) { if (!/\(404\)/.test(e.message)) throw e; } }
   const pick = x => Array.isArray(x) ? x[0] : x;
@@ -1240,8 +1238,8 @@ async function fillFlightExtras(el, f) {
   // Aircraft
   const reg = f.aircraftReg;
   const base = `<div class="ac-row"><div><span>Aircraft</span><b>${esc(f.aircraft || f.aircraftType || 'Not assigned yet')}</b></div><div><span>Registration</span><b>${esc(reg || '—')}</b></div></div>`;
-  ac.innerHTML = base + (reg ? '<div class="muted small">Loading aircraft details…</div>' : `<div class="muted small">${S.settings.apiKey ? 'The airline assigns the exact aircraft closer to departure.' : 'Turn on live data in Settings to see aircraft details.'}</div>`);
-  if (reg && S.settings.apiKey) {
+  ac.innerHTML = base + (reg ? '<div class="muted small">Loading aircraft details…</div>' : `<div class="muted small">${SYS.adbKey ? 'The airline assigns the exact aircraft closer to departure.' : 'Turn on live data in Settings to see aircraft details.'}</div>`);
+  if (reg && SYS.adbKey) {
     try {
       const a = await aircraftInfo(reg);
       if (!el.isConnected) return;
@@ -1263,7 +1261,7 @@ async function fillFlightExtras(el, f) {
   // Delay history: this flight number (AeroDataBox) + your own history
   const mine = live(S.flights).filter(x => x.num === f.num && x.id !== f.id && x.depSched && arrT(x) < Date.now());
   const mineHtml = mine.length ? `<div class="muted small" style="margin-top:8px">You’ve flown ${esc(f.num)} ${mine.length} time${mine.length > 1 ? 's' : ''} before${mine.some(x => x.depEst) ? ` · average departure delay ${dur(Math.max(0, mine.reduce((t, x) => t + depDelay(x), 0) / mine.length) * M)}` : ''}.</div>` : '';
-  if (!S.settings.apiKey) { dl.innerHTML = `<div class="muted small">Turn on live data in Settings to see how often ${esc(f.num)} is late.</div>${mineHtml}`; return; }
+  if (!SYS.adbKey) { dl.innerHTML = `<div class="muted small">Turn on live data in Settings to see how often ${esc(f.num)} is late.</div>${mineHtml}`; return; }
   dl.innerHTML = `<div class="muted small">Loading delay history…</div>`;
   try {
     const d = await delayStats(f.num); if (!el.isConnected) return;
@@ -1321,14 +1319,14 @@ function importIcsText(text) {
   sheet(`${sheetHd(`Found ${found.length} flight${found.length > 1 ? 's' : ''}`)}
     <div class="card" style="padding:0 4px">${found.map((c, i) => `<label class="chk"><input type="checkbox" data-ics="${i}" ${dupe(c) ? '' : 'checked'}>
       <div style="flex:1"><b>${esc(c.num)}</b> ${esc(c.from.iata)} → ${esc(c.to.iata)}<div class="muted small">${fmtDate(c.depSched, c.from.tz, { weekday: 'short', month: 'short', day: 'numeric', year: 'numeric' })} · ${fmtTime(c.depSched, c.from.tz)}${dupe(c) ? ' · already added' : ''}</div></div></label>`).join('')}</div>
-    <p class="muted small">Flights with “???” airports can be fixed with Edit after importing${S.settings.apiKey ? ', or refreshed from live data' : ''}.</p>
+    <p class="muted small">Flights with “???” airports can be fixed with Edit after importing${SYS.adbKey ? ', or refreshed from live data' : ''}.</p>
     <button class="btn pri" style="width:100%" data-act="ics-confirm">Import selected</button>`);
 }
 function confirmIcs() {
   const picks = [...document.querySelectorAll('[data-ics]')].filter(x => x.checked).map(x => window.__icsFound[+x.dataset.ics]);
   picks.forEach(c => S.flights.push(Object.assign({ id: uid(), updatedAt: Date.now() }, c)));
   save(); closeSheet(); tab = 'flights'; render(); toast(`Imported ${picks.length} flight${picks.length === 1 ? '' : 's'}`);
-  if (S.settings.apiKey) refreshAll();
+  if (SYS.adbKey) refreshAll();
 }
 function icsFor(flights) {
   const z = ts => new Date(ts).toISOString().replace(/[-:]/g, '').replace(/\.\d+/, '');
@@ -1418,15 +1416,60 @@ function initFirebase() {
       if (!window.firebase) { await loadScript(base + 'firebase-app-compat.js'); await loadScript(base + 'firebase-auth-compat.js'); await loadScript(base + 'firebase-firestore-compat.js'); }
       const app = firebase.apps.length ? firebase.app() : firebase.initializeApp(cfg);
       fb = { auth: app.auth(), db: app.firestore() };
-      await new Promise(res => { let first = true; fb.auth.onAuthStateChanged(u => {
+      await new Promise(res => { let first = true; fb.auth.onAuthStateChanged(async u => {
         user = u;
-        if (u && (!account || account.uid !== u.uid)) startSession({ username: u.displayName || (u.email || 'traveler').split('@')[0], mode: 'cloud', uid: u.uid, google: u.providerData.some(p => p.providerId === 'google.com') });
-        else if (!u && account?.mode === 'cloud') { account = null; render(); }
-        if (first) { first = false; res(); }
+        try {
+          if (u && !u.providerData.some(p => p.providerId === 'google.com')) { authMsg = 'Only Google sign-in is allowed.'; await fb.auth.signOut(); }
+          else if (u && (!account || account.uid !== u.uid)) { if (await checkAccess(u)) startSession({ username: u.displayName || (u.email || 'traveler').split('@')[0], mode: 'cloud', uid: u.uid, google: true }); }
+          else if (!u && account?.mode === 'cloud') { account = null; render(); }
+        } finally { if (first) { first = false; res(); } }
       }); });
       return true;
     } catch (e) { console.error(e); fb = null; fbReady = null; return false; }
   })();
+}
+
+// ---------- Access control: approved Google accounts only ----------
+async function checkAccess(u) {
+  try {
+    const c = await fb.db.collection('config').doc('app').get(); // readable only by approved members and the admin
+    SYS = { adbKey: '', liveProxy: '', ...(c.exists ? c.data() : {}) }; gate = null;
+    try { await fb.db.collection('members').limit(1).get(); isAdmin = true; } catch (e) { isAdmin = false; }
+    return true;
+  } catch (e) {
+    if (e.code !== 'permission-denied') { gate = 'offline'; renderGate(u, e.message); return false; }
+    try {
+      const ref = fb.db.collection('members').doc(u.uid), d = await ref.get();
+      if (!d.exists) await ref.set({ status: 'pending', email: u.email || '', name: u.displayName || '', photo: u.photoURL || '', requestedAt: Date.now() });
+      gate = d.exists && d.data().status === 'blocked' ? 'blocked' : 'pending';
+    } catch (e2) { gate = 'setup'; }
+    renderGate(u); return false;
+  }
+}
+function renderGate(u, msg) {
+  document.body.classList.remove('authed', 'home'); closeSheet();
+  const t = { pending: ['Waiting for approval', `Your request to join was sent. You’ll get access as soon as the admin approves <b>${esc(u.email || '')}</b>.`],
+    blocked: ['Access not approved', 'The admin hasn’t approved this account.'],
+    setup: ['Server setup needed', `The admin needs to publish Contrail’s new security rules in Firebase. Signed in as <b>${esc(u.email || '')}</b>.`],
+    offline: ['Can’t reach the server', esc(msg || 'Check your connection and try again.')] }[gate];
+  $('#main').innerHTML = `<div class="auth"><div class="auth-card"><img class="auth-logo" src="apple-touch-icon.png" alt=""><h1>${t[0]}</h1><p class="sub" style="margin-bottom:18px">${t[1]}</p>
+    <button class="btn pri block" data-act="gate-retry">Check again</button><button class="btn block" style="margin-top:10px" data-act="signout">Sign out</button></div></div>`;
+}
+async function saveSys(obj) {
+  if (!isAdmin) return toast('Only the admin can change this');
+  await fb.db.collection('config').doc('app').set(obj, { merge: true }); SYS = { ...SYS, ...obj };
+}
+async function loadMembers() { const q = await fb.db.collection('members').get(); return q.docs.map(d => ({ id: d.id, ...d.data() })); }
+async function fillAdmin() {
+  const box = $('#adminCard'); if (!box || !isAdmin) return;
+  try {
+    const ms = await loadMembers(); if (!box.isConnected) return;
+    const pend = ms.filter(m => m.status === 'pending').sort((a, b) => (a.requestedAt || 0) - (b.requestedAt || 0)), ok = ms.filter(m => m.status === 'approved'), blk = ms.filter(m => m.status === 'blocked');
+    const row = (m, btns) => `<div class="list-row"><div class="mrow">${m.photo ? `<img src="${esc(m.photo)}" alt="" referrerpolicy="no-referrer">` : `<span class="avatar sm" style="${avatarStyle(m.name || m.email)}">${esc(initials(m.name || m.email))}</span>`}<div><b>${esc(m.name || '—')}</b><span class="muted small">${esc(m.email || '')}</span></div></div><div class="mbtns">${btns}</div></div>`;
+    box.innerHTML = `<b>Waiting for approval</b>${pend.length ? pend.map(m => row(m, `<button class="btn sm pri" data-act="m-set" data-uid="${m.id}" data-v="approved">Approve</button><button class="btn sm" data-act="m-set" data-uid="${m.id}" data-v="blocked">Decline</button>`)).join('') : '<div class="muted small" style="margin:6px 0 4px">No requests right now.</div>'}
+      <b style="display:block;margin-top:16px">Members (${ok.length})</b>${ok.length ? ok.map(m => row(m, `<button class="btn sm danger" data-act="m-set" data-uid="${m.id}" data-v="blocked">Remove</button>`)).join('') : '<div class="muted small" style="margin-top:6px">Only you so far.</div>'}
+      ${blk.length ? `<details class="small" style="margin-top:12px"><summary class="muted">Declined (${blk.length})</summary>${blk.map(m => row(m, `<button class="btn sm" data-act="m-set" data-uid="${m.id}" data-v="approved">Approve</button>`)).join('')}</details>` : ''}`;
+  } catch (e) { box.innerHTML = `<div class="muted small">Couldn’t load members (${esc(e.code || e.message)}).</div>`; }
 }
 
 // ---------- Accounts (username + password) ----------
@@ -1494,8 +1537,10 @@ function startSession(acc) {
   if (pendingShare) { const p = pendingShare; pendingShare = null; receiveShare(p); }
   if (pendingCfg) { const c = pendingCfg; pendingCfg = null; setTimeout(() => applyCfgLink(c), 300); }
   if (acc.mode === 'cloud') pull();
+  if (isAdmin) loadMembers().then(ms => { const n = ms.filter(m => m.status === 'pending').length; if (n) toast(`${n} ${n > 1 ? 'people are' : 'person is'} waiting for approval — see Settings`, 4000); }).catch(() => {});
 }
 async function signOut() {
+  isAdmin = false; gate = null; SYS = { adbKey: '', liveProxy: '' };
   if (account?.mode === 'cloud' && fb) await fb.auth.signOut().catch(() => {});
   localStorage.removeItem(SESSION_KEY); account = null; user = null;
   S.flights = []; S.friends = []; S.settings = { ...DEFAULTS };
@@ -1504,23 +1549,13 @@ async function signOut() {
 let authMode = 'signin';
 function renderAuth() {
   document.body.classList.remove('authed', 'home'); closeSheet();
-  const cloud = !!parseConfig(fbCfgText());
-  const isUp = authMode === 'signup';
   $('#main').innerHTML = `<div class="auth"><div class="auth-card">
-    <img class="auth-logo" src="icon.svg" alt="">
-    <h1>Contrail</h1><p class="sub">${isUp ? 'Create your account' : 'Welcome back'}</p>
-    <div class="seg"><button data-auth="signin" class="${!isUp ? 'on' : ''}">Sign in</button><button data-auth="signup" class="${isUp ? 'on' : ''}">Create account</button></div>
-    <form id="authForm" autocomplete="on">
-      <label class="f"><span>Username</span><input id="a_user" name="username" autocomplete="username" autocapitalize="none" spellcheck="false" required></label>
-      <label class="f"><span>Password</span><div class="pw"><input id="a_pw" type="password" name="password" autocomplete="${isUp ? 'new-password' : 'current-password'}" required minlength="6"><button type="button" data-act="toggle-pw">Show</button></div></label>
-      ${isUp ? `<label class="f"><span>Confirm password</span><input id="a_pw2" type="password" autocomplete="new-password" required></label>` : ''}
-      <div class="err" id="authErr"></div>
-      <button class="btn pri block" type="submit" id="authBtn">${isUp ? 'Create account' : 'Sign in'}</button>
-    </form>
-    ${cloud ? `<div class="or"><span>or</span></div><button class="btn block gbtn" data-act="google"><svg width="18" height="18" viewBox="0 0 48 48"><path fill="#FFC107" d="M43.6 20.5H42V20H24v8h11.3C33.7 32.7 29.2 36 24 36c-6.6 0-12-5.4-12-12s5.4-12 12-12c3.1 0 5.8 1.2 7.9 3.1l5.7-5.7C34 6.1 29.3 4 24 4 12.9 4 4 12.9 4 24s8.9 20 20 20 20-8.9 20-20c0-1.3-.1-2.4-.4-3.5z"/><path fill="#FF3D00" d="m6.3 14.7 6.6 4.8C14.7 15.1 19 12 24 12c3.1 0 5.8 1.2 7.9 3.1l5.7-5.7C34 6.1 29.3 4 24 4 16.3 4 9.7 8.3 6.3 14.7z"/><path fill="#4CAF50" d="M24 44c5.2 0 9.9-2 13.4-5.2l-6.2-5.2C29.2 35.1 26.7 36 24 36c-5.2 0-9.6-3.3-11.3-8l-6.5 5C9.5 39.6 16.2 44 24 44z"/><path fill="#1976D2" d="M43.6 20.5H42V20H24v8h11.3c-.8 2.2-2.2 4.2-4.1 5.6l6.2 5.2C37 39.2 44 34 44 24c0-1.3-.1-2.4-.4-3.5z"/></svg>Continue with Google</button>` : ''}
-    <p class="muted small" style="text-align:center;margin:16px 0 0">${cloud ? '☁︎ Sign in on any device — your flights sync.' : 'Your account and flights are stored on this device.'}</p>
+    <img class="auth-logo" src="apple-touch-icon.png" alt="">
+    <h1>Contrail</h1><p class="sub">Sign in with your Google account</p>
+    <div class="err" id="authErr">${esc(authMsg)}</div>
+    <button class="btn block gbtn" data-act="google"><svg width="18" height="18" viewBox="0 0 48 48"><path fill="#FFC107" d="M43.6 20.5H42V20H24v8h11.3C33.7 32.7 29.2 36 24 36c-6.6 0-12-5.4-12-12s5.4-12 12-12c3.1 0 5.8 1.2 7.9 3.1l5.7-5.7C34 6.1 29.3 4 24 4 12.9 4 4 12.9 4 24s8.9 20 20 20 20-8.9 20-20c0-1.3-.1-2.4-.4-3.5z"/><path fill="#FF3D00" d="m6.3 14.7 6.6 4.8C14.7 15.1 19 12 24 12c3.1 0 5.8 1.2 7.9 3.1l5.7-5.7C34 6.1 29.3 4 24 4 16.3 4 9.7 8.3 6.3 14.7z"/><path fill="#4CAF50" d="M24 44c5.2 0 9.9-2 13.4-5.2l-6.2-5.2C29.2 35.1 26.7 36 24 36c-5.2 0-9.6-3.3-11.3-8l-6.5 5C9.5 39.6 16.2 44 24 44z"/><path fill="#1976D2" d="M43.6 20.5H42V20H24v8h11.3c-.8 2.2-2.2 4.2-4.1 5.6l6.2 5.2C37 39.2 44 34 44 24c0-1.3-.1-2.4-.4-3.5z"/></svg>Continue with Google</button>
+    <p class="muted small" style="text-align:center;margin:16px 0 0">New accounts are approved by the admin before they can sign in.</p>
   </div></div>`;
-  setTimeout(() => $('#a_user')?.focus(), 50);
 }
 document.addEventListener('submit', async e => {
   if (e.target.id !== 'authForm') return;
@@ -1585,7 +1620,8 @@ async function pull() {
   if (!fb || !user) return;
   try {
     const doc = await fb.db.collection('users').doc(user.uid).get();
-    if (doc.exists) { const d = doc.data(); S.flights = mergeList(S.flights, d.flights); S.friends = mergeList(S.friends, d.friends); if (!S.settings.name && d.name) S.settings.name = d.name; if (!S.settings.apiKey && d.apiKey) S.settings.apiKey = d.apiKey; if (!S.settings.liveProxy && d.liveProxy) S.settings.liveProxy = d.liveProxy; if (d.units) S.settings.units = d.units; }
+    if (doc.exists) { const d = doc.data(); S.flights = mergeList(S.flights, d.flights); S.friends = mergeList(S.friends, d.friends); if (!S.settings.name && d.name) S.settings.name = d.name; if (isAdmin && !SYS.adbKey && (d.apiKey || S.settings.apiKey)) { await saveSys({ adbKey: d.apiKey || S.settings.apiKey, liveProxy: SYS.liveProxy || d.liveProxy || S.settings.liveProxy || '' }); toast('Live-data key moved to system settings'); }
+      delete S.settings.apiKey; delete S.settings.liveProxy; if (d.units) S.settings.units = d.units; }
     
     save(false); await push(); render();
   } catch (e) { console.error(e); toast('Sync failed: ' + (e.code || e.message)); }
@@ -1593,7 +1629,7 @@ async function pull() {
 const clean = o => JSON.parse(JSON.stringify(o));
 async function push() {
   if (!fb || !user) return;
-  try { await fb.db.collection('users').doc(user.uid).set(clean({ flights: S.flights, friends: S.friends, name: S.settings.name || '', apiKey: S.settings.apiKey || '', liveProxy: S.settings.liveProxy || '', units: S.settings.units || 'mi', updatedAt: Date.now() })); }
+  try { await fb.db.collection('users').doc(user.uid).set(clean({ flights: S.flights, friends: S.friends, name: S.settings.name || '', units: S.settings.units || 'mi', updatedAt: Date.now() })); }
   catch (e) { console.error(e); }
 }
 function schedulePush() { if (!user) return; clearTimeout(pushTimer); pushTimer = setTimeout(push, 1200); }
@@ -1654,7 +1690,11 @@ document.addEventListener('click', async e => {
     case 'signout': await signOut(); toast('Signed out'); break;
     case 'install': $('#instBanner')?.remove(); openInstall(); break;
     case 'inst-dismiss': localStorage.setItem('contrail.instDismissed', Date.now()); $('#instBanner')?.remove(); break;
-    case 'google': signInGoogle(); break;
+    case 'google': authMsg = ''; signInGoogle(); break;
+    case 'gate-retry': if (user && await checkAccess(user)) startSession({ username: user.displayName || (user.email || 'traveler').split('@')[0], mode: 'cloud', uid: user.uid, google: true }); break;
+    case 'm-set': t.disabled = true; try { await fb.db.collection('members').doc(t.dataset.uid).update({ status: t.dataset.v, decidedAt: Date.now() }); toast(t.dataset.v === 'approved' ? 'Approved' : 'Done'); } catch (err) { toast(err.code || err.message); } fillAdmin(); break;
+    case 'sys-save': t.disabled = true; try { await saveSys({ adbKey: $('#sysKey').value.trim(), liveProxy: $('#sysLive').value.trim() }); toast('System settings saved'); render(); } catch (err) { toast(err.code || err.message); } t.disabled = false; break;
+    case 'sys-show': { const i = $('#sysKey'); i.type = i.type === 'password' ? 'text' : 'password'; t.textContent = i.type === 'password' ? 'Show' : 'Hide'; break; }
     case 'change-pw': changePassword(); break;
     case 'delete-account': deleteAccount(); break;
     case 'smart-paste': smartPaste(); break;
@@ -1750,10 +1790,9 @@ document.addEventListener('visibilitychange', () => { if (!document.hidden) setT
 
 // ---------- Boot ----------
 let pendingCfg = null;
-function applyCfgLink(c) {
-  if (c.key) S.settings.apiKey = c.key;
-  if (c.live) S.settings.liveProxy = c.live;
-  save(); render(); toast(c.key ? '✓ Live flight data is on' : '✓ Live plane position is on');
+async function applyCfgLink(c) {
+  if (!isAdmin) return toast('Only the admin can change system settings');
+  await saveSys(c.key ? { adbKey: c.key } : { liveProxy: c.live }); render(); toast('System settings saved');
   if (c.key) refreshAll(true);
 }
 function handleHash() {
@@ -1763,11 +1802,11 @@ function handleHash() {
 window.addEventListener('hashchange', handleHash);
 (async () => {
   const sess = localStorage.getItem(SESSION_KEY), local = sess && getUsers()[sess];
-  if (local && !parseConfig(fbCfgText())) startSession({ username: local.username, mode: 'local' });
+  if (false && local) startSession({ username: local.username, mode: 'local' });
   else if (parseConfig(fbCfgText())) {
     $('#main').innerHTML = '<div class="auth"><p class="muted">Loading…</p></div>';
     const ok = await initFirebase();
-    if (!account) { if (!ok && local) startSession({ username: local.username, mode: 'local' }); else renderAuth(); }
+    if (!account && !gate) { if (!ok) authMsg = 'Can’t reach the sign-in server. Check your connection.'; renderAuth(); }
   }
   else renderAuth();
   handleHash();
