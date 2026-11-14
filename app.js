@@ -8,23 +8,27 @@ AIRPORT_DATA.split('\n').forEach(l => {
   const [iata, name, city, cc, lat, lon, tz] = l.split('|');
   AP[iata] = { iata, name, city, cc, lat: +lat, lon: +lon, tz };
 });
-const LS_KEY = 'contrail.v1';
+const LEGACY_KEY = 'contrail.v1', USERS_KEY = 'contrail.users', SESSION_KEY = 'contrail.session', CFG_KEY = 'contrail.cfg';
 const DEVICE_TZ = Intl.DateTimeFormat().resolvedOptions().timeZone;
-const S = load();
+const DEFAULTS = { units: 'mi', apiKey: '', name: '', notify: false };
+const S = { flights: [], friends: [], settings: { ...DEFAULTS } };
 let tab = 'flights', sub = 'upcoming';
-let fb = null, user = null, pushTimer = null;
+let fb = null, user = null, pushTimer = null, account = null, pendingShare = null;
 const H = 3600e3, M = 60e3;
+const readJSON = (k, d) => { try { return JSON.parse(localStorage.getItem(k)) ?? d; } catch (e) { return d; } };
+const CFG = readJSON(CFG_KEY, {});
+(() => { const old = readJSON(LEGACY_KEY, null); if (old?.settings?.fbConfig && !CFG.fbConfig) { CFG.fbConfig = old.settings.fbConfig; localStorage.setItem(CFG_KEY, JSON.stringify(CFG)); } })();
+const saveCfg = () => localStorage.setItem(CFG_KEY, JSON.stringify(CFG));
+const dataKey = () => 'contrail.data.' + account.username.toLowerCase();
 
-function load() {
-  let d = {};
-  try { d = JSON.parse(localStorage.getItem(LS_KEY) || '{}'); } catch (e) {}
-  return {
-    flights: d.flights || [], friends: d.friends || [],
-    settings: Object.assign({ units: 'mi', apiKey: '', fbConfig: '', name: '', notify: false }, d.settings || {})
-  };
+function loadUser() {
+  const d = readJSON(dataKey(), {});
+  S.flights = d.flights || []; S.friends = d.friends || [];
+  S.settings = Object.assign({}, DEFAULTS, { name: account.username }, d.settings || {});
 }
 function save(sync = true) {
-  try { localStorage.setItem(LS_KEY, JSON.stringify(S)); } catch (e) {}
+  if (!account) return;
+  try { localStorage.setItem(dataKey(), JSON.stringify(S)); } catch (e) {}
   if (sync) schedulePush();
   scheduleReminders();
 }
@@ -99,6 +103,75 @@ function getAirport(code) {
   return AP[code] ? { ...AP[code] } : (code ? { iata: code, name: code, city: '', tz: DEVICE_TZ } : null);
 }
 
+// ---------- Airline & flight-number detection ----------
+const hue = s => { let h = 0; for (const c of String(s)) h = (h * 31 + c.charCodeAt(0)) % 360; return h; };
+const badge = (code, lg) => `<span class="badge${lg ? ' lg' : ''}" style="background:linear-gradient(145deg,hsl(${hue(code)} 70% 58%),hsl(${(hue(code) + 40) % 360} 65% 38%))">${esc(code || '?')}</span>`;
+const ALIASES = (() => {
+  const m = new Map(Object.entries(AIRLINE_ALIASES));
+  Object.entries(AIRLINES).forEach(([c, n]) => {
+    const l = n.toLowerCase(); m.set(l, c);
+    const short = l.replace(/\s+(air ?lines|airways|airline|air)$/, ''); if (short.length >= 3) m.set(short, c);
+  });
+  return [...m.entries()].sort((a, b) => b[0].length - a[0].length);
+})();
+const mkNum = (c, n) => ({ num: c + String(n).replace(/^0+(?=\d)/, ''), iata: c, airline: AIRLINES[c] || '' });
+function parseFlight(raw) {
+  const s = (raw || '').trim(); if (!s) return null;
+  const up = s.toUpperCase().replace(/[\s\-–]+/g, ' ').trim();
+  let m = up.match(/^([A-Z]{3}) ?(\d{1,4})[A-Z]?$/); if (m && AIRLINE_ICAO[m[1]]) return { ...mkNum(AIRLINE_ICAO[m[1]], m[2]), via: 'ICAO ' + m[1] };
+  m = up.match(/^([A-Z0-9]{2}) ?(\d{1,4})[A-Z]?$/); if (m && AIRLINES[m[1]]) return mkNum(m[1], m[2]);
+  const low = s.toLowerCase().replace(/\s+/g, ' ');
+  for (const [alias, code] of ALIASES) {
+    if (low === alias || low.startsWith(alias + ' ') || (low.startsWith(alias) && /\d/.test(low[alias.length] || ''))) {
+      const n = low.slice(alias.length).trim().replace(/^(flight|flt|#)\s*/, '').match(/^(\d{1,4})$/);
+      return n ? mkNum(code, n[1]) : { partial: true, iata: code, airline: AIRLINES[code] };
+    }
+  }
+  if (AIRLINES[up]) return { partial: true, iata: up, airline: AIRLINES[up] };
+  if (AIRLINE_ICAO[up]) return { partial: true, iata: AIRLINE_ICAO[up], airline: AIRLINES[AIRLINE_ICAO[up]] };
+  m = up.match(/^([A-Z][A-Z0-9]|[0-9][A-Z]) ?(\d{1,4})$/); if (m) return { num: m[1] + m[2], iata: m[1], airline: '', unknown: true };
+  return null;
+}
+function detectChip(p) {
+  if (!p) return '';
+  if (p.partial) return `<div class="chip">${badge(p.iata)}<div class="sp"><b>${esc(p.airline)}</b><span class="muted small">Now add the flight number</span></div></div>`;
+  if (p.unknown) return `<div class="chip">${badge(p.iata)}<div class="sp"><b>Flight ${esc(p.num)}</b><span class="muted small">Airline “${esc(p.iata)}” not in the list — that’s OK, it still works</span></div></div>`;
+  return `<div class="chip">${badge(p.iata)}<div class="sp"><b>${esc(p.airline)}</b><span class="muted small">Flight ${esc(p.num)}${p.via ? ' · from ' + esc(p.via) : ''}</span></div><span class="pill ok">✓</span></div>`;
+}
+const MONTHS = ['jan', 'feb', 'mar', 'apr', 'may', 'jun', 'jul', 'aug', 'sep', 'oct', 'nov', 'dec'];
+function guessYear(mo, d) { const now = new Date(), y = now.getFullYear(); return new Date(y, mo, d) < new Date(now - 60 * 864e5) ? y + 1 : y; }
+const ymd = (y, mo, d) => `${y}-${String(mo + 1).padStart(2, '0')}-${String(d).padStart(2, '0')}`;
+// Pull a flight out of any pasted text: confirmation emails, messages, itineraries
+function extractFromText(text) {
+  const out = {}; const T = text.replace(/ /g, ' ');
+  // flight number
+  const re = /\b([A-Z]{3}|[A-Z][A-Z0-9]|[0-9][A-Z]) ?(\d{1,4})\b/g; let m;
+  while ((m = re.exec(T.toUpperCase()))) {
+    if (m[1].length === 3 && AIRLINE_ICAO[m[1]]) { Object.assign(out, mkNum(AIRLINE_ICAO[m[1]], m[2])); break; }
+    if (m[1].length === 2 && AIRLINES[m[1]] && !/^\d+$/.test(m[1])) { Object.assign(out, mkNum(m[1], m[2])); break; }
+  }
+  if (!out.num) {
+    const low = T.toLowerCase();
+    for (const [alias, code] of ALIASES) { const r = new RegExp('\\b' + alias.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '\\s*(?:flight|flt|#)?\\s*(\\d{1,4})\\b'); const x = low.match(r); if (x) { Object.assign(out, mkNum(code, x[1])); break; } }
+  }
+  // airports — prefer explicit "AAA → BBB" pairs
+  const pair = T.match(/\b([A-Z]{3})\b\s*(?:→|->|–|-|—|to|✈︎?|>)\s*\b([A-Z]{3})\b/);
+  if (pair && AP[pair[1]] && AP[pair[2]]) { out.from = pair[1]; out.to = pair[2]; }
+  else { const codes = [...new Set((T.match(/\b[A-Z]{3}\b/g) || []).filter(c => AP[c]))]; if (codes[0]) out.from = codes[0]; if (codes[1]) out.to = codes[1]; }
+  // date
+  let d = T.match(/\b(20\d\d)-(\d{2})-(\d{2})\b/);
+  if (d) out.date = `${d[1]}-${d[2]}-${d[3]}`;
+  else if ((d = T.match(/\b(\d{1,2})(?:st|nd|rd|th)?\s+(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*\.?,?\s*(20\d\d)?/i))) { const mo = MONTHS.indexOf(d[2].toLowerCase()); out.date = ymd(d[3] ? +d[3] : guessYear(mo, +d[1]), mo, +d[1]); }
+  else if ((d = T.match(/\b(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*\.?\s+(\d{1,2})(?:st|nd|rd|th)?,?\s*(20\d\d)?/i))) { const mo = MONTHS.indexOf(d[1].toLowerCase()); out.date = ymd(d[3] ? +d[3] : guessYear(mo, +d[2]), mo, +d[2]); }
+  else if ((d = T.match(/\b(\d{1,2})\/(\d{1,2})\/(20\d\d)\b/))) out.date = ymd(+d[3], +d[1] - 1, +d[2]);
+  // times
+  const times = [...T.matchAll(/\b(\d{1,2})[:.](\d{2})\s*([AaPp]\.?[Mm]\.?)?/g)].map(x => { let h = +x[1]; const ap = (x[3] || '').toLowerCase(); if (ap.startsWith('p') && h < 12) h += 12; if (ap.startsWith('a') && h === 12) h = 0; return h < 24 && +x[2] < 60 ? `${String(h).padStart(2, '0')}:${x[2]}` : null; }).filter(Boolean);
+  if (times[0]) out.dep = times[0]; if (times[1]) out.arr = times[1];
+  const seat = T.match(/\bseat:?\s*(\d{1,2}[A-K])\b/i); if (seat) out.seat = seat[1].toUpperCase();
+  const conf = T.match(/(?:confirmation|booking|record locator|PNR|reservation)(?:\s*(?:code|number|#|no\.?))?\s*:?\s*([A-Z0-9]{6})\b/i); if (conf) out.conf = conf[1].toUpperCase();
+  return out;
+}
+
 // ---------- Flight logic ----------
 const depT = f => f.depEst || f.depSched;
 const arrT = f => f.arrEst || f.arrSched;
@@ -124,7 +197,7 @@ function flightCard(f, opts = {}) {
   const ph = phase(f), cd = countdown(f);
   const pct = Math.max(0, Math.min(1, ph.p)) * 100;
   return `<div class="card fcard" data-open="${esc(f.id)}" data-src="${opts.friend ? 'friends' : 'flights'}">
-    <div class="top"><span>${esc(f.num)} · ${esc(f.airline || airlineOf(f.num))}</span><span>${fmtDate(depT(f), f.from?.tz)}</span></div>
+    <div class="top">${badge(f.num.slice(0, 2))}<span class="sp"><b style="color:var(--text)">${esc(f.num)}</b> · ${esc(f.airline || airlineOf(f.num))}</span><span>${fmtDate(depT(f), f.from?.tz)}</span></div>
     ${opts.friend ? `<div class="small muted" style="margin:-4px 0 6px">✈︎ ${esc(f.sharedBy || 'Friend')}</div>` : ''}
     <div class="route">
       <div class="ap"><div class="code">${esc(f.from?.iata || '???')}</div><div class="t">${fmtTime(depT(f), f.from?.tz)}</div><div class="city">${esc(apLabel(f.from))}</div></div>
@@ -148,8 +221,14 @@ const TABS = [
 function renderTabs() {
   $('#tabs').innerHTML = TABS.map(([k, l, ic]) => `<button data-tab="${k}" class="${tab === k ? 'on' : ''}"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">${ic}</svg>${l}</button>`).join('');
 }
+const TITLES = { flights: 'Flights', friends: 'Friends', stats: 'Passport', settings: 'Settings' };
+const initials = n => (n || '?').trim().split(/[\s._-]+/).map(w => w[0]).join('').slice(0, 2).toUpperCase();
+const avatarStyle = n => `background:linear-gradient(145deg,hsl(${hue(n)} 70% 60%),hsl(${(hue(n) + 60) % 360} 70% 40%))`;
 function render() {
+  if (!account) return renderAuth();
   renderTabs();
+  $('#title').textContent = TITLES[tab];
+  const av = $('#hdrAvatar'); av.textContent = initials(account.username); av.setAttribute('style', avatarStyle(account.username));
   const m = $('#main');
   if (tab === 'flights') m.innerHTML = viewFlights();
   else if (tab === 'friends') m.innerHTML = viewFriends();
@@ -161,7 +240,11 @@ function viewFlights() {
   const up = all.filter(f => arrT(f) > now - 6 * H).sort((a, b) => depT(a) - depT(b));
   const past = all.filter(f => arrT(f) <= now - 6 * H).sort((a, b) => depT(b) - depT(a));
   const list = sub === 'upcoming' ? up : past;
-  let html = `<div class="seg"><button data-sub="upcoming" class="${sub === 'upcoming' ? 'on' : ''}">Upcoming (${up.length})</button><button data-sub="past" class="${sub === 'past' ? 'on' : ''}">Past (${past.length})</button></div>`;
+  let html = `<div class="quick"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" style="opacity:.6;flex:none"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg>
+      <input id="quickNum" placeholder="Flight number — LY8, ELY8, Delta 100…" autocomplete="off" autocapitalize="characters" enterkeyhint="go">
+      <button class="icon-btn" data-act="smart-paste" title="Paste from email or message" aria-label="Paste"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="8" y="3" width="8" height="4" rx="1"/><path d="M16 5h2a2 2 0 0 1 2 2v12a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V7a2 2 0 0 1 2-2h2"/></svg></button></div>
+    <div class="detect-slot" id="quickChip"></div>
+    <div class="seg"><button data-sub="upcoming" class="${sub === 'upcoming' ? 'on' : ''}">Upcoming (${up.length})</button><button data-sub="past" class="${sub === 'past' ? 'on' : ''}">Past (${past.length})</button></div>`;
   if (!list.length) {
     html += `<div class="empty"><svg viewBox="0 0 24 24" fill="currentColor"><path d="M21 16v-2l-8-5V3.5a1.5 1.5 0 0 0-3 0V9l-8 5v2l8-2.5V19l-2 1.5V22l3.5-1 3.5 1v-1.5L13 19v-5.5z"/></svg>
       <p>${sub === 'upcoming' ? 'No upcoming flights.' : 'No past flights yet.'}</p>
@@ -229,10 +312,9 @@ function viewStats() {
 }
 function viewSettings() {
   const st = S.settings;
-  const acct = user ? `<div style="display:flex;gap:12px;align-items:center"><div class="avatar">${user.photoURL ? `<img src="${esc(user.photoURL)}" alt="">` : esc((user.displayName || user.email || '?')[0])}</div>
-      <div style="flex:1"><b>${esc(user.displayName || 'Signed in')}</b><div class="muted small">${esc(user.email || '')} · syncing</div></div><button class="btn sm" data-act="signout">Sign out</button></div>`
-    : fb ? `<p class="muted small" style="margin-top:0">Sign in to sync flights across devices.</p><div class="actions" style="margin:0"><button class="btn pri" data-act="signin-google">Continue with Google</button><button class="btn" data-act="signin-github">Continue with GitHub</button></div>`
-    : `<p class="muted small" style="margin-top:0">Sign-in and sync use your own free Firebase project. Paste its web config under <b>Advanced</b> below to turn on Google / GitHub login.</p>`;
+  const acct = `<div style="display:flex;gap:14px;align-items:center"><div class="avatar lg" style="${avatarStyle(account.username)}">${esc(initials(account.username))}</div>
+      <div style="flex:1;min-width:0"><b style="font-size:18px">${esc(account.username)}</b><div class="muted small">${account.mode === 'cloud' ? '☁︎ Synced account' : 'Account on this device'}</div></div></div>
+    <div class="actions" style="margin-bottom:0"><button class="btn sm" data-act="change-pw">Change password</button><button class="btn sm" data-act="signout">Sign out</button><button class="btn sm danger" data-act="delete-account">Delete account</button></div>`;
   return `<h2>Account</h2><div class="card">${acct}</div>
     <h2>Profile</h2><div class="card"><label class="f"><span>Your name (shown when you share flights)</span><input id="setName" value="${esc(st.name)}" placeholder="e.g. Omri"></label>
       <label class="f" style="margin:0"><span>Distance units</span><select id="setUnits"><option value="mi" ${st.units === 'mi' ? 'selected' : ''}>Miles</option><option value="km" ${st.units === 'km' ? 'selected' : ''}>Kilometers</option></select></label></div>
@@ -242,12 +324,7 @@ function viewSettings() {
       <p class="muted small" style="margin-bottom:0">Reminders 3 hours and 45 minutes before departure, and when you land, while Contrail is open or installed.</p></div>
     <h2>Live flight data</h2><div class="card"><label class="f"><span>AeroDataBox API key (free tier on RapidAPI)</span><input id="setKey" value="${esc(st.apiKey)}" placeholder="Paste key to enable lookup & live updates" autocomplete="off"></label>
       <p class="muted small" style="margin:0">With a key, type a flight number and date to auto-fill airports, times, gates, terminals, delays and aircraft. Without one, add flights manually — everything else still works.</p></div>
-    <h2>Advanced</h2><div class="card"><label class="f"><span>Firebase web config (for login + sync)</span><textarea id="setFb" rows="5" placeholder='{ "apiKey": "...", "authDomain": "...", "projectId": "...", "appId": "..." }'>${esc(st.fbConfig)}</textarea></label>
-      <button class="btn sm" data-act="save-fb">Save & connect</button>
-      <details class="small muted" style="margin-top:10px"><summary>How to set this up (5 min)</summary><ol style="padding-left:18px">
-      <li>Go to console.firebase.google.com → Add project.</li><li>Build → Authentication → enable <b>Google</b> (and optionally GitHub).</li>
-      <li>Authentication → Settings → Authorized domains → add your GitHub Pages domain.</li><li>Build → Firestore Database → Create, then set rules to:<br><code>match /users/{u} { allow read, write: if request.auth.uid == u; }</code></li>
-      <li>Project settings → Your apps → Web app → copy the config object here.</li></ol></details></div>
+    <h2>Sync server</h2><div class="card">${syncServerHtml()}</div>
     <h2>Data</h2><div class="card"><div class="actions" style="margin:0"><button class="btn sm" data-act="backup">Download backup</button><button class="btn sm" data-act="restore">Restore backup</button><button class="btn sm danger" data-act="wipe">Delete all data</button></div></div>
     <p class="muted small" style="text-align:center">Contrail · free & open · your data stays on your device</p>`;
 }
@@ -333,18 +410,21 @@ function drawWorldMap() {
 
 // ---------- Add / edit ----------
 function airportOptions() { return `<datalist id="apList">${Object.values(AP).map(a => `<option value="${a.iata}">${esc(a.city)} — ${esc(a.name)}</option>`).join('')}</datalist>`; }
-function openEditor(id) {
+function openEditor(id, prefill = {}) {
   const f = id ? S.flights.find(x => x.id === id) : null;
   const today = localDate(Date.now(), DEVICE_TZ);
+  window.__lookup = null;
   const v = f ? {
     num: f.num, date: localDate(f.depSched, f.from?.tz), from: f.from?.iata, to: f.to?.iata,
     dep: localHM(f.depSched, f.from?.tz), arr: localHM(f.arrSched, f.to?.tz), arrDate: localDate(f.arrSched, f.to?.tz),
     terminalDep: f.terminalDep, gateDep: f.gateDep, terminalArr: f.terminalArr, gateArr: f.gateArr, seat: f.seat, conf: f.conf, aircraft: f.aircraft, notes: f.notes
-  } : { date: today };
+  } : Object.assign({ date: today }, prefill);
   const inp = (k, label, ph = '', type = 'text') => `<label class="f"><span>${label}</span><input id="e_${k}" type="${type}" value="${esc(v[k] || '')}" placeholder="${ph}" ${k === 'from' || k === 'to' ? 'list="apList" autocapitalize="characters" maxlength="4"' : ''}></label>`;
   sheet(`${sheetHd(f ? 'Edit flight' : 'Add flight')}
-    <div class="row">${inp('num', 'Flight number', 'e.g. LY 8')}${inp('date', 'Date', '', 'date')}</div>
-    ${S.settings.apiKey ? `<button class="btn pri" style="width:100%;margin-bottom:12px" data-act="lookup">Look up flight</button><p class="muted small" style="margin-top:-6px">Or fill in the details yourself:</p>` : `<p class="muted small" style="margin-top:-4px">Tip: add a free API key in Settings to auto-fill everything from the flight number.</p>`}
+    <div class="row">${inp('num', 'Flight number or airline', 'LY8 · ELY8 · El Al 8')}${inp('date', 'Date', '', 'date')}</div>
+    <div class="detect-slot" id="editChip">${detectChip(parseFlight(v.num))}</div>
+    ${f ? '' : `<button class="btn sm" style="margin:-2px 0 12px" data-act="smart-paste">📋 Paste from email or message</button>`}
+    ${S.settings.apiKey ? `<div id="lookupStatus" class="muted small" style="margin:-4px 4px 10px">Route and times fill in automatically once the flight number and date are set.</div>` : `<p class="muted small" style="margin:-4px 4px 12px">Add a free live-data key in Settings and the route, times, gates and aircraft fill in automatically.</p>`}
     <div class="row">${inp('from', 'From (airport code)', 'JFK')}${inp('to', 'To', 'TLV')}</div>
     <div class="row">${inp('dep', 'Departs (local time)', '', 'time')}${inp('arr', 'Arrives (local time)', '', 'time')}</div>
     ${inp('arrDate', 'Arrival date (if different)', '', 'date')}
@@ -354,19 +434,69 @@ function openEditor(id) {
     <div class="row">${inp('seat', 'Seat', '23A')}${inp('conf', 'Confirmation', 'ABC123')}</div>
     ${inp('aircraft', 'Aircraft', 'Boeing 787-9')}
     <label class="f"><span>Notes</span><textarea id="e_notes" rows="2">${esc(v.notes || '')}</textarea></label></details>
-    <button class="btn pri" style="width:100%" data-act="save-flight" data-id="${f ? f.id : ''}">${f ? 'Save changes' : 'Add flight'}</button>
+    <button class="btn pri block" data-act="save-flight" data-id="${f ? f.id : ''}">${f ? 'Save changes' : 'Add flight'}</button>
     ${airportOptions()}`);
+  if (!f && v.num) scheduleAutoLookup();
 }
+function fillEditor(o) {
+  Object.entries(o).forEach(([k, val]) => { const el = $('#e_' + k); if (el && val) el.value = val; });
+  if (o.num) $('#editChip').innerHTML = detectChip(parseFlight(o.num));
+  if (o.seat || o.conf) { const d = document.querySelector('#sheet details'); if (d) d.open = true; }
+}
+let lookupTimer = null;
+function scheduleAutoLookup() {
+  clearTimeout(lookupTimer);
+  if (!S.settings.apiKey) return;
+  const p = parseFlight(ev('num')), date = ev('date');
+  if (!p || p.partial || !date) return;
+  lookupTimer = setTimeout(async () => {
+    const st = $('#lookupStatus'); if (!st) return;
+    st.textContent = `Looking up ${p.num}…`;
+    try {
+      const res = await lookupFlight(p.num, date);
+      if (normNum(parseFlight(ev('num'))?.num) !== p.num || ev('date') !== date) return; // input changed meanwhile
+      if (!res || !res.length) { st.textContent = `No live data for ${p.num} on that date — fill in the details below.`; return; }
+      let pick = res[0];
+      if (res.length > 1) { const from = ev('from'); pick = res.find(r => r.from.iata === from) || res[0]; }
+      window.__lookup = pick;
+      fillEditor({ from: pick.from.iata, to: pick.to.iata, dep: localHM(pick.depSched, pick.from.tz), arr: localHM(pick.arrSched, pick.to.tz),
+        arrDate: localDate(pick.arrSched, pick.to.tz), terminalDep: pick.terminalDep, gateDep: pick.gateDep, terminalArr: pick.terminalArr, gateArr: pick.gateArr, aircraft: pick.aircraft });
+      st.innerHTML = `✓ Found <b>${esc(pick.from.iata)} → ${esc(pick.to.iata)}</b>${pick.aircraft ? ' · ' + esc(pick.aircraft) : ''}${res.length > 1 ? ` · ${res.length} legs, change “From” to pick another` : ''}`;
+    } catch (e) { st.textContent = e.message; }
+  }, 650);
+}
+async function smartPaste() {
+  let text = '';
+  try { text = await navigator.clipboard.readText(); } catch (e) {}
+  const apply = t => {
+    const x = extractFromText(t || '');
+    if (!x.num && !x.from) return toast('Couldn’t find a flight in that text');
+    if (!$('#e_num')) openEditor(null, x); else { fillEditor(x); scheduleAutoLookup(); }
+    toast(x.num ? `Found ${x.num}${x.from && x.to ? ` · ${x.from} → ${x.to}` : ''}` : 'Found route details');
+  };
+  if (text && text.length > 3) return apply(text);
+  const wasEditor = !!$('#e_num');
+  const keep = wasEditor ? collectEditor() : null;
+  sheet(`${sheetHd('Paste flight details')}<p class="muted small" style="margin-top:-6px">Paste a confirmation email, text message or itinerary. Contrail picks out the flight number, airline, airports, date, times, seat and booking code.</p>
+    <textarea id="pasteBox" rows="8" placeholder="e.g. Your El Al flight LY 8 from JFK to TLV departs Nov 20 at 6:00 PM…"></textarea>
+    <button class="btn pri block" style="margin-top:12px" data-act="paste-go">Find my flight</button>`, el => el.querySelector('#pasteBox').focus());
+  window.__pasteApply = t => { closeSheet(); if (keep) { openEditor(null, keep); } apply(t); };
+}
+function collectEditor() { const o = {}; ['num', 'date', 'from', 'to', 'dep', 'arr', 'arrDate', 'seat', 'conf'].forEach(k => { const v = ev(k); if (v) o[k] = v; }); return o; }
 const ev = k => ($('#e_' + k)?.value || '').trim();
 function saveFromEditor(id) {
-  const num = normNum(ev('num')), date = ev('date'), from = getAirport(ev('from')), to = getAirport(ev('to'));
+  const pf = parseFlight(ev('num'));
+  const num = pf && !pf.partial ? pf.num : normNum(ev('num')), date = ev('date');
+  const lk = window.__lookup && window.__lookup.num === num && window.__lookup.from.iata === ev('from').toUpperCase() && window.__lookup.to.iata === ev('to').toUpperCase() ? window.__lookup : null;
+  const from = lk ? lk.from : getAirport(ev('from')), to = lk ? lk.to : getAirport(ev('to'));
   if (!num || !date || !from || !to || !ev('dep') || !ev('arr')) return toast('Fill in flight number, date, airports and times');
   const depSched = zonedToUtc(date, ev('dep'), from.tz);
   let arrSched = zonedToUtc(ev('arrDate') || date, ev('arr'), to.tz);
   while (arrSched <= depSched) arrSched += 864e5;
   const existing = id ? S.flights.find(x => x.id === id) : null;
   const f = Object.assign(existing || { id: uid(), source: 'manual' }, {
-    num, airline: airlineOf(num) || existing?.airline || '', from, to, depSched, arrSched,
+    num, airline: lk?.airline || pf?.airline || airlineOf(num) || existing?.airline || '', from, to, depSched, arrSched,
+    ...(lk ? { depEst: lk.depEst, arrEst: lk.arrEst, baggage: lk.baggage, status: lk.status, updatedLive: lk.updatedLive, source: 'api' } : {}),
     terminalDep: ev('terminalDep'), gateDep: ev('gateDep'), terminalArr: ev('terminalArr'), gateArr: ev('gateArr'),
     seat: ev('seat'), conf: ev('conf'), aircraft: ev('aircraft'), notes: ev('notes'), updatedAt: Date.now()
   });
@@ -512,14 +642,14 @@ const b64e = s => btoa(unescape(encodeURIComponent(s))).replace(/\+/g, '-').repl
 const b64d = s => decodeURIComponent(escape(atob(s.replace(/-/g, '+').replace(/_/g, '/'))));
 const slimAp = a => a && { iata: a.iata, name: a.name, city: a.city, cc: a.cc, lat: a.lat, lon: a.lon, tz: a.tz };
 function shareUrl(flights) {
-  const by = S.settings.name || user?.displayName || 'A friend';
+  const by = S.settings.name || account?.username || 'A friend';
   const payload = { v: 1, by, f: flights.map(f => ({ id: f.id, num: f.num, airline: f.airline, from: AP[f.from?.iata] ? f.from.iata : slimAp(f.from), to: AP[f.to?.iata] ? f.to.iata : slimAp(f.to),
     depSched: f.depSched, arrSched: f.arrSched, depEst: f.depEst, arrEst: f.arrEst, gateDep: f.gateDep, terminalDep: f.terminalDep, aircraft: f.aircraft, status: f.status })) };
   return location.origin + location.pathname + '#share=' + b64e(JSON.stringify(payload));
 }
 async function shareFlights(flights) {
   if (!flights.length) return toast('No upcoming flights to share');
-  if (!S.settings.name && !user) { const n = prompt('Your name (so friends know who is flying):', ''); if (n) { S.settings.name = n.trim(); save(); } }
+  if (!S.settings.name) { const n = prompt('Your name (so friends know who is flying):', ''); if (n) { S.settings.name = n.trim(); save(); } }
   const url = shareUrl(flights);
   const text = flights.length === 1 ? `Track my flight ${flights[0].num} ${flights[0].from?.iata} → ${flights[0].to?.iata} on Contrail` : `Track my ${flights.length} upcoming flights on Contrail`;
   if (navigator.share) { try { await navigator.share({ title: 'My flights', text, url }); return; } catch (e) { if (e.name === 'AbortError') return; } }
@@ -572,24 +702,149 @@ function parseConfig(txt) {
   try { return JSON.parse(m[0].replace(/([{,]\s*)([A-Za-z_$][\w$]*)\s*:/g, '$1"$2":').replace(/'/g, '"').replace(/,\s*}/g, '}')); } catch (e) { return null; }
 }
 const loadScript = src => new Promise((res, rej) => { const s = document.createElement('script'); s.src = src; s.onload = res; s.onerror = rej; document.head.appendChild(s); });
-async function initFirebase() {
-  const cfg = parseConfig(S.settings.fbConfig); if (!cfg || !cfg.apiKey) return false;
-  try {
-    const v = '10.12.2', base = `https://www.gstatic.com/firebasejs/${v}/`;
-    if (!window.firebase) { await loadScript(base + 'firebase-app-compat.js'); await loadScript(base + 'firebase-auth-compat.js'); await loadScript(base + 'firebase-firestore-compat.js'); }
-    const app = firebase.apps.length ? firebase.app() : firebase.initializeApp(cfg);
-    fb = { auth: app.auth(), db: app.firestore() };
-    fb.auth.getRedirectResult().catch(e => toast(e.message));
-    fb.auth.onAuthStateChanged(async u => { user = u; if (u) { await pull(); } if (tab === 'settings') render(); });
-    if (tab === 'settings') render();
-    return true;
-  } catch (e) { console.error(e); toast('Could not connect to Firebase'); fb = null; return false; }
+let fbReady = null;
+function initFirebase() {
+  const cfg = parseConfig(CFG.fbConfig); if (!cfg || !cfg.apiKey) return Promise.resolve(false);
+  return fbReady ||= (async () => {
+    try {
+      const base = 'https://www.gstatic.com/firebasejs/10.12.2/';
+      if (!window.firebase) { await loadScript(base + 'firebase-app-compat.js'); await loadScript(base + 'firebase-auth-compat.js'); await loadScript(base + 'firebase-firestore-compat.js'); }
+      const app = firebase.apps.length ? firebase.app() : firebase.initializeApp(cfg);
+      fb = { auth: app.auth(), db: app.firestore() };
+      await new Promise(res => { let first = true; fb.auth.onAuthStateChanged(u => {
+        user = u;
+        if (u && (!account || account.uid !== u.uid)) startSession({ username: u.displayName || u.email.split('@')[0], mode: 'cloud', uid: u.uid });
+        else if (!u && account?.mode === 'cloud') { account = null; render(); }
+        if (first) { first = false; res(); }
+      }); });
+      return true;
+    } catch (e) { console.error(e); fb = null; fbReady = null; return false; }
+  })();
 }
-async function signIn(kind) {
-  if (!fb) return toast('Add your Firebase config in Settings first');
-  const p = kind === 'github' ? new firebase.auth.GithubAuthProvider() : new firebase.auth.GoogleAuthProvider();
-  try { await fb.auth.signInWithPopup(p); toast('Signed in'); }
-  catch (e) { if (/popup/i.test(e.code || '')) fb.auth.signInWithRedirect(p); else toast(e.message); }
+
+// ---------- Accounts (username + password) ----------
+const USER_RE = /^[a-zA-Z0-9_.-]{3,24}$/;
+const toEmail = u => u.includes('@') ? u : `${u.toLowerCase()}@users.contrail.app`;
+const rand = n => [...crypto.getRandomValues(new Uint8Array(n))].map(b => b.toString(16).padStart(2, '0')).join('');
+async function hashPw(pw, salt, iter = 210000) {
+  const enc = new TextEncoder();
+  const k = await crypto.subtle.importKey('raw', enc.encode(pw), 'PBKDF2', false, ['deriveBits']);
+  const bits = await crypto.subtle.deriveBits({ name: 'PBKDF2', salt: enc.encode(salt), iterations: iter, hash: 'SHA-256' }, k, 256);
+  return [...new Uint8Array(bits)].map(b => b.toString(16).padStart(2, '0')).join('');
+}
+const getUsers = () => readJSON(USERS_KEY, {});
+const fbErr = e => ({ 'auth/email-already-in-use': 'That username is taken', 'auth/invalid-credential': 'Wrong username or password', 'auth/wrong-password': 'Wrong username or password', 'auth/user-not-found': 'No account with that username', 'auth/weak-password': 'Password must be at least 6 characters', 'auth/too-many-requests': 'Too many attempts — try again in a minute', 'auth/network-request-failed': 'No connection to the sync server' }[e.code] || e.message);
+async function signUp(username, pw) {
+  if (!USER_RE.test(username)) throw new Error('Username: 3–24 letters, numbers, . _ or -');
+  if (pw.length < 6) throw new Error('Password must be at least 6 characters');
+  if (await initFirebase()) {
+    try { const c = await fb.auth.createUserWithEmailAndPassword(toEmail(username), pw); await c.user.updateProfile({ displayName: username }); startSession({ username, mode: 'cloud', uid: c.user.uid }); return; }
+    catch (e) { throw new Error(fbErr(e)); }
+  }
+  const users = getUsers(), key = username.toLowerCase();
+  if (users[key]) throw new Error('That username is taken on this device');
+  const salt = rand(16), iter = 210000;
+  users[key] = { username, salt, iter, hash: await hashPw(pw, salt, iter), created: Date.now() };
+  localStorage.setItem(USERS_KEY, JSON.stringify(users));
+  // carry over flights saved before accounts existed
+  const legacy = readJSON(LEGACY_KEY, null);
+  if (legacy && Object.keys(users).length === 1) { localStorage.setItem('contrail.data.' + key, JSON.stringify({ flights: legacy.flights || [], friends: legacy.friends || [], settings: { ...legacy.settings, fbConfig: undefined } })); localStorage.removeItem(LEGACY_KEY); }
+  startSession({ username, mode: 'local' });
+}
+async function signInPw(username, pw) {
+  if (await initFirebase()) {
+    try { await fb.auth.signInWithEmailAndPassword(toEmail(username), pw); return; }
+    catch (e) { throw new Error(fbErr(e)); }
+  }
+  const u = getUsers()[username.toLowerCase()];
+  if (!u || await hashPw(pw, u.salt, u.iter) !== u.hash) throw new Error('Wrong username or password');
+  startSession({ username: u.username, mode: 'local' });
+}
+function startSession(acc) {
+  account = acc; authMode = 'signin';
+  if (acc.mode === 'local') localStorage.setItem(SESSION_KEY, acc.username.toLowerCase());
+  loadUser(); closeSheet(); tab = 'flights';
+  document.body.classList.add('authed'); render(); scheduleReminders(); refreshAll();
+  if (pendingShare) { const p = pendingShare; pendingShare = null; receiveShare(p); }
+  if (acc.mode === 'cloud') pull();
+}
+async function signOut() {
+  if (account?.mode === 'cloud' && fb) await fb.auth.signOut().catch(() => {});
+  localStorage.removeItem(SESSION_KEY); account = null; user = null;
+  S.flights = []; S.friends = []; S.settings = { ...DEFAULTS };
+  reminderTimers.forEach(clearTimeout); authMode = 'signin'; render();
+}
+let authMode = 'signin';
+function renderAuth() {
+  document.body.classList.remove('authed'); closeSheet();
+  const cloud = !!parseConfig(CFG.fbConfig);
+  const isUp = authMode === 'signup';
+  $('#main').innerHTML = `<div class="auth"><div class="auth-card">
+    <img class="auth-logo" src="icon.svg" alt="">
+    <h1>Contrail</h1><p class="sub">${isUp ? 'Create your account' : 'Welcome back'}</p>
+    <div class="seg"><button data-auth="signin" class="${!isUp ? 'on' : ''}">Sign in</button><button data-auth="signup" class="${isUp ? 'on' : ''}">Create account</button></div>
+    <form id="authForm" autocomplete="on">
+      <label class="f"><span>Username</span><input id="a_user" name="username" autocomplete="username" autocapitalize="none" spellcheck="false" required></label>
+      <label class="f"><span>Password</span><div class="pw"><input id="a_pw" type="password" name="password" autocomplete="${isUp ? 'new-password' : 'current-password'}" required minlength="6"><button type="button" data-act="toggle-pw">Show</button></div></label>
+      ${isUp ? `<label class="f"><span>Confirm password</span><input id="a_pw2" type="password" autocomplete="new-password" required></label>` : ''}
+      <div class="err" id="authErr"></div>
+      <button class="btn pri block" type="submit" id="authBtn">${isUp ? 'Create account' : 'Sign in'}</button>
+    </form>
+    <p class="muted small" style="text-align:center;margin:16px 0 0">${cloud ? '☁︎ Accounts sync across your devices.' : 'Your account and flights are stored on this device.'}<br><a href="#" data-act="sync-server">${cloud ? 'Sync server settings' : 'Sync across devices…'}</a></p>
+  </div></div>`;
+  setTimeout(() => $('#a_user')?.focus(), 50);
+}
+document.addEventListener('submit', async e => {
+  if (e.target.id !== 'authForm') return;
+  e.preventDefault();
+  const u = $('#a_user').value.trim(), pw = $('#a_pw').value, err = $('#authErr'), btn = $('#authBtn');
+  err.textContent = '';
+  if (authMode === 'signup' && pw !== $('#a_pw2').value) { err.textContent = 'Passwords don’t match'; return; }
+  btn.disabled = true; const label = btn.textContent; btn.textContent = 'One moment…';
+  try { authMode === 'signup' ? await signUp(u, pw) : await signInPw(u, pw); }
+  catch (x) { err.textContent = x.message; btn.disabled = false; btn.textContent = label; }
+});
+function syncServerHtml() {
+  return `<p class="muted small" style="margin-top:0">By default, accounts live on one device. To sign in from any device, connect a free Firebase project — then usernames and flights sync everywhere.</p>
+    <label class="f"><span>Firebase web config</span><textarea id="setFb" rows="5" placeholder='{ "apiKey": "...", "authDomain": "...", "projectId": "...", "appId": "..." }'>${esc(CFG.fbConfig || '')}</textarea></label>
+    <button class="btn sm" data-act="save-fb">Save</button>
+    <details class="small muted" style="margin-top:12px"><summary>How to set this up (5 min)</summary><ol style="padding-left:18px">
+    <li>console.firebase.google.com → Add project.</li><li>Build → Authentication → Sign-in method → enable <b>Email/Password</b>.</li>
+    <li>Authentication → Settings → Authorized domains → add <code>${esc(location.hostname || 'your-site.github.io')}</code>.</li>
+    <li>Build → Firestore Database → Create, then set rules:<br><code>match /users/{u} { allow read, write: if request.auth.uid == u; }</code></li>
+    <li>Project settings → Your apps → Web → copy the config here.</li></ol>
+    Accounts created before connecting stay on their device; create a new account after connecting to sync.</details>`;
+}
+async function changePassword() {
+  const cur = prompt('Current password:'); if (cur == null) return;
+  const nw = prompt('New password (6+ characters):'); if (!nw) return;
+  if (nw.length < 6) return toast('Password must be at least 6 characters');
+  try {
+    if (account.mode === 'cloud') {
+      const cred = firebase.auth.EmailAuthProvider.credential(user.email, cur);
+      await user.reauthenticateWithCredential(cred); await user.updatePassword(nw);
+    } else {
+      const users = getUsers(), u = users[account.username.toLowerCase()];
+      if (await hashPw(cur, u.salt, u.iter) !== u.hash) return toast('Current password is wrong');
+      u.salt = rand(16); u.hash = await hashPw(nw, u.salt, u.iter); localStorage.setItem(USERS_KEY, JSON.stringify(users));
+    }
+    toast('Password changed');
+  } catch (e) { toast(fbErr(e)); }
+}
+async function deleteAccount() {
+  if (!confirm(`Delete the account “${account.username}” and all its flights? This can’t be undone.`)) return;
+  const pw = prompt('Enter your password to confirm:'); if (pw == null) return;
+  try {
+    if (account.mode === 'cloud') {
+      await user.reauthenticateWithCredential(firebase.auth.EmailAuthProvider.credential(user.email, pw));
+      await fb.db.collection('users').doc(user.uid).delete(); await user.delete();
+    } else {
+      const users = getUsers(), key = account.username.toLowerCase(), u = users[key];
+      if (await hashPw(pw, u.salt, u.iter) !== u.hash) return toast('Wrong password');
+      delete users[key]; localStorage.setItem(USERS_KEY, JSON.stringify(users));
+    }
+    localStorage.removeItem(dataKey()); await signOut(); toast('Account deleted');
+  } catch (e) { toast(fbErr(e)); }
 }
 function mergeList(local, remote) {
   const map = new Map(local.map(f => [f.id, f]));
@@ -601,7 +856,7 @@ async function pull() {
   try {
     const doc = await fb.db.collection('users').doc(user.uid).get();
     if (doc.exists) { const d = doc.data(); S.flights = mergeList(S.flights, d.flights); S.friends = mergeList(S.friends, d.friends); if (!S.settings.name && d.name) S.settings.name = d.name; }
-    if (!S.settings.name && user.displayName) S.settings.name = user.displayName.split(' ')[0];
+    
     save(false); await push(); render();
   } catch (e) { console.error(e); toast('Sync failed: ' + (e.code || e.message)); }
 }
@@ -615,7 +870,8 @@ function schedulePush() { if (!user) return; clearTimeout(pushTimer); pushTimer 
 
 // ---------- Events ----------
 document.addEventListener('click', async e => {
-  const t = e.target.closest('[data-tab],[data-sub],[data-year],[data-act],[data-open]'); if (!t) return;
+  const t = e.target.closest('[data-tab],[data-sub],[data-year],[data-act],[data-open],[data-auth]'); if (!t) return;
+  if (t.dataset.auth) { authMode = t.dataset.auth; renderAuth(); return; }
   if (t.dataset.tab) { tab = t.dataset.tab; render(); scrollTo(0, 0); return; }
   if (t.dataset.sub) { sub = t.dataset.sub; render(); return; }
   if (t.dataset.year) { statYear = t.dataset.year; render(); return; }
@@ -645,10 +901,20 @@ document.addEventListener('click', async e => {
       const p = await Notification.requestPermission(); S.settings.notify = p === 'granted'; save(false); render();
       toast(p === 'granted' ? 'Reminders on' : 'Notifications were blocked'); break;
     }
-    case 'save-fb': S.settings.fbConfig = $('#setFb').value.trim(); save(false); if (await initFirebase()) toast('Connected — now sign in'); else toast('Config not recognized'); break;
-    case 'signin-google': signIn('google'); break;
-    case 'signin-github': signIn('github'); break;
-    case 'signout': await fb.auth.signOut(); user = null; render(); toast('Signed out'); break;
+    case 'save-fb': {
+      const txt = $('#setFb').value.trim();
+      if (txt && !parseConfig(txt)) { toast('That config wasn’t recognized'); break; }
+      CFG.fbConfig = txt; saveCfg(); fbReady = null;
+      if (!txt) { toast('Sync server removed'); break; }
+      toast(await initFirebase() ? 'Sync server connected' : 'Couldn’t reach Firebase'); if (!account) { closeSheet(); renderAuth(); } break;
+    }
+    case 'sync-server': e.preventDefault(); sheet(`${sheetHd('Sync server')}${syncServerHtml()}`); break;
+    case 'toggle-pw': { const i = $('#a_pw'); i.type = i.type === 'password' ? 'text' : 'password'; t.textContent = i.type === 'password' ? 'Show' : 'Hide'; break; }
+    case 'signout': await signOut(); toast('Signed out'); break;
+    case 'change-pw': changePassword(); break;
+    case 'delete-account': deleteAccount(); break;
+    case 'smart-paste': smartPaste(); break;
+    case 'paste-go': window.__pasteApply($('#pasteBox').value); break;
     case 'backup': download('contrail-backup.json', JSON.stringify({ flights: S.flights, friends: S.friends }, null, 1), 'application/json'); break;
     case 'restore': $('#backupFile').click(); break;
     case 'wipe': if (confirm('Delete all flights on this device? (Synced copies are also cleared.)')) { [...S.flights, ...S.friends].forEach(f => { f.deleted = true; f.updatedAt = Date.now(); }); save(); render(); } break;
@@ -659,7 +925,8 @@ document.addEventListener('change', e => {
   if (e.target.id === 'setName') { st.name = e.target.value.trim(); save(); }
   if (e.target.id === 'setUnits') { st.units = e.target.value; save(false); }
   if (e.target.id === 'setKey') { st.apiKey = e.target.value.trim(); save(false); toast(st.apiKey ? 'Live data on' : 'Live data off'); }
-  if (e.target.id === 'e_from' || e.target.id === 'e_to') e.target.value = e.target.value.toUpperCase();
+  if (e.target.id === 'e_from' || e.target.id === 'e_to') { e.target.value = e.target.value.toUpperCase(); if (e.target.id === 'e_from' && window.__lookup) scheduleAutoLookup(); }
+  if (e.target.id === 'e_date') scheduleAutoLookup();
 });
 $('#icsFile').addEventListener('change', async e => { const f = e.target.files[0]; if (f) importIcsText(await f.text()); e.target.value = ''; });
 $('#backupFile').addEventListener('change', async e => {
@@ -669,15 +936,35 @@ $('#backupFile').addEventListener('change', async e => {
 });
 $('#hdrAction').addEventListener('click', () => openEditor());
 
+document.addEventListener('input', e => {
+  const id = e.target.id;
+  if (id === 'quickNum') {
+    const v = e.target.value;
+    if (v.length > 24 || /\n/.test(v)) { e.target.value = ''; $('#quickChip').innerHTML = ''; const x = extractFromText(v); if (x.num || x.from) { openEditor(null, x); toast(`Found ${x.num || ''} ${x.from && x.to ? x.from + ' → ' + x.to : ''}`); } return; }
+    $('#quickChip').innerHTML = detectChip(parseFlight(v));
+  }
+  if (id === 'e_num') { $('#editChip').innerHTML = detectChip(parseFlight(e.target.value)); scheduleAutoLookup(); }
+});
+document.addEventListener('keydown', e => {
+  if (e.target.id === 'quickNum' && e.key === 'Enter') {
+    const p = parseFlight(e.target.value); if (!p) return toast('Type a flight number like LY8');
+    openEditor(null, { num: p.partial ? p.iata : p.num });
+  }
+});
+
 // ---------- Boot ----------
-function handleHash() { const m = location.hash.match(/^#share=([\w-]+)/); if (m) { history.replaceState(null, '', location.pathname + location.search); receiveShare(m[1]); } }
+function handleHash() { const m = location.hash.match(/^#share=([\w-]+)/); if (m) { history.replaceState(null, '', location.pathname + location.search); account ? receiveShare(m[1]) : (pendingShare = m[1], toast('Sign in to see the shared flight')); } }
 window.addEventListener('hashchange', handleHash);
-render(); handleHash(); scheduleReminders();
-if (S.settings.fbConfig) initFirebase();
-refreshAll();
-setInterval(() => { if (!$('#sheet') && tab !== 'stats' && tab !== 'settings') render(); }, 30e3);
+(async () => {
+  const sess = localStorage.getItem(SESSION_KEY), local = sess && getUsers()[sess];
+  if (local) startSession({ username: local.username, mode: 'local' });
+  else if (CFG.fbConfig) { $('#main').innerHTML = '<div class="auth"><p class="muted">Loading…</p></div>'; await initFirebase(); if (!account) renderAuth(); }
+  else renderAuth();
+  handleHash();
+})();
+setInterval(() => { if (account && !$('#sheet') && tab !== 'stats' && tab !== 'settings' && document.activeElement?.id !== 'quickNum') render(); }, 30e3);
 setInterval(() => refreshAll(), 10 * M);
-document.addEventListener('visibilitychange', () => { if (!document.hidden) { render(); refreshAll(); } });
+document.addEventListener('visibilitychange', () => { if (!document.hidden && account) { if (document.activeElement?.id !== 'quickNum') render(); refreshAll(); } });
 if ('serviceWorker' in navigator && location.protocol === 'https:') navigator.serviceWorker.register('sw.js').catch(() => {});
 window.__contrail = { S, parseIcs, detectFlight, importIcsText, zonedToUtc, shareUrl, receiveShare };
 })();

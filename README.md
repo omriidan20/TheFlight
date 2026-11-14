@@ -2,7 +2,7 @@
 
 A free, open-source flight tracker that runs entirely in the browser (installable as an app on your phone).
 
-**Features:** add flights (manual or live lookup), live progress and map, trip timeline, departure reminders, lifetime stats ("Passport") with a route map, **import from calendar (.ics)**, export to calendar, **share flights with friends** via link, **Google / GitHub sign-in with cloud sync**, backup and restore. No paywall.
+**Features:** add flights (manual or live lookup), live progress and map, trip timeline, departure reminders, lifetime stats ("Passport") with a route map, **import from calendar (.ics)**, export to calendar, **share flights with friends** via link, **username + password accounts** (optional cloud sync), **automatic flight-number and airline detection** (IATA, ICAO or airline name, plus paste-from-email), backup and restore. No paywall.
 
 ## Deploy on GitHub Pages
 1. Upload all files in this folder to the root of the repo.
@@ -11,4 +11,4 @@ A free, open-source flight tracker that runs entirely in the browser (installabl
 
 ## Optional extras
 - **Live flight data:** get a free AeroDataBox key on RapidAPI and paste it in Settings.
-- **Sign-in and sync:** create a free Firebase project and follow the steps under Settings → Advanced.
+- **Sync across devices:** create a free Firebase project with Email/Password sign-in and follow the steps under Settings → Sync server.
