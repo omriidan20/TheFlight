@@ -189,6 +189,10 @@ function phase(f, now = Date.now()) {
   if (now < a) return { key: 'air', label: 'In the air', cls: 'air', p: (now - d) / (a - d) };
   return { key: 'landed', label: 'Landed', cls: 'ok', p: 1 };
 }
+const depDelay = f => f.depEst && f.depSched ? Math.round((f.depEst - f.depSched) / M) : 0;
+const arrDelay = f => f.arrEst && f.arrSched ? Math.round((f.arrEst - f.arrSched) / M) : 0;
+const dcls = m => m >= 5 ? 'late' : m <= -1 ? 'early' : '';
+const tlabel = (m, done, word) => m >= 5 ? `${done ? word : 'Delayed'} ${dur(m * M)} late` : m <= -1 ? `${dur(-m * M)} early` : '';
 const delayMin = f => f.depEst && f.depSched ? Math.round((f.depEst - f.depSched) / M) : 0;
 function countdown(f, now = Date.now()) {
   const ph = phase(f, now), d = depT(f), a = arrT(f);
@@ -205,11 +209,11 @@ function flightCard(f, opts = {}) {
     <div class="top">${logo(f.num.slice(0, 2))}<span class="sp"><b style="color:var(--text)">${esc(f.num)}</b> · ${esc(f.airline || airlineOf(f.num))}</span><span>${fmtDate(depT(f), f.from?.tz)}</span></div>
     ${opts.friend ? `<div class="small muted" style="margin:-4px 0 6px">✈︎ ${esc(f.sharedBy || 'Friend')}</div>` : ''}
     <div class="route">
-      <div class="ap"><div class="code">${esc(f.from?.iata || '???')}</div><div class="t">${fmtTime(depT(f), f.from?.tz)}</div><div class="city">${esc(apLabel(f.from))}</div></div>
+      <div class="ap"><div class="code">${esc(f.from?.iata || '???')}</div><div class="t ${dcls(depDelay(f))}">${fmtTime(depT(f), f.from?.tz)}</div><div class="city">${esc(apLabel(f.from))}</div></div>
       <div class="mid"><div>${dur(arrT(f) - depT(f))}</div>
         <div class="bar"><i style="width:${pct}%"></i>${ph.key === 'air' ? `<b style="left:${pct}%">${planeSvg(90)}</b>` : ''}</div>
         <span class="pill ${ph.cls}">${esc(f.status && !/sched|expect|unknown/i.test(f.status) && ph.key !== 'air' ? f.status : ph.label)}</span></div>
-      <div class="ap right"><div class="code">${esc(f.to?.iata || '???')}</div><div class="t">${fmtTime(arrT(f), f.to?.tz)}</div><div class="city" style="margin-left:auto">${esc(apLabel(f.to))}</div></div>
+      <div class="ap right"><div class="code">${esc(f.to?.iata || '???')}</div><div class="t ${dcls(arrDelay(f))}">${fmtTime(arrT(f), f.to?.tz)}</div><div class="city" style="margin-left:auto">${esc(apLabel(f.to))}</div></div>
     </div>
     ${cd && !opts.past ? `<div class="countdown">${cd}${f.gateDep ? ` · Gate ${esc(f.gateDep)}` : ''}</div>` : ''}
   </div>`;
@@ -296,7 +300,7 @@ function viewSettings() {
       <p class="muted small" style="margin:0">${liveProxy() ? '✓ Using your OpenSky server.' : 'Leave empty unless live position doesn’t show up.'}</p></div>
     <h2>Sync server</h2><div class="card">${syncServerHtml()}</div>
     <h2>Data</h2><div class="card"><div class="actions" style="margin:0"><button class="btn sm" data-act="backup">Download backup</button><button class="btn sm" data-act="restore">Restore backup</button><button class="btn sm danger" data-act="wipe">Delete all data</button></div></div>
-    <p class="muted small" style="text-align:center">Contrail · version 12</p>`;
+    <p class="muted small" style="text-align:center">Contrail · version 13</p>`;
 }
 
 // ---------- Sheets ----------
@@ -507,7 +511,7 @@ function rowItem(f, past) {
     <div class="fr-main">
       <div class="fr-top">${logo(f.num.slice(0, 2))}<span>${esc(f.num)}</span><span class="sp"></span><span>${past ? fmtDate(d, f.from?.tz, { year: 'numeric' }) : fmtDate(d, f.from?.tz)}</span></div>
       <div class="fr-title">${cityOf(f.from)} <span class="muted">to</span> ${cityOf(f.to)}</div>
-      <div class="fr-times"><span><i>↗</i> <em>${esc(f.from?.iata)}</em> ${fmtTime(d, f.from?.tz)}</span><span><i>↘</i> <em>${esc(f.to?.iata)}</em> ${fmtTime(a, f.to?.tz)}${plus ? `<sup>${plus > 0 ? '+' : ''}${plus}</sup>` : ''}</span></div>
+      <div class="fr-times"><span><i>↗</i> <em>${esc(f.from?.iata)}</em> <b class="${dcls(depDelay(f))}">${fmtTime(d, f.from?.tz)}</b></span><span><i>↘</i> <em>${esc(f.to?.iata)}</em> <b class="${dcls(arrDelay(f))}">${fmtTime(a, f.to?.tz)}</b>${plus ? `<sup>${plus > 0 ? '+' : ''}${plus}</sup>` : ''}</span></div>
       ${ph.key === 'air' ? `<div class="bar"><i style="width:${ph.p * 100}%"></i></div><div class="small" style="color:var(--acc)">Lands in ${dur(a - now)}</div>` : ''}
       ${!past && dl >= 15 ? `<span class="pill warn" style="margin-top:6px">Delayed ${dur(dl * M)}</span>` : ''}
     </div></div>`;
@@ -566,10 +570,10 @@ function openFlight(id, src = 'flights') {
     <div class="dhead">${logo(f.num.slice(0, 2), true)}<div class="sp"><div class="muted small caps">${esc(f.num)} · ${fmtDate(d, f.from?.tz)}${f.airline ? ' · ' + esc(f.airline) : ''}</div><h3>${cityOf(f.from)} to ${cityOf(f.to)}</h3>${friend ? `<div class="muted small">Shared by ${esc(f.sharedBy || 'a friend')}</div>` : ''}</div><button class="icon-btn" data-act="close" aria-label="Close">✕</button></div></div>
     <div class="dscroll"><div class="statusbox ${ph.cls}"><b>${status}</b><span>${sub2}</span>${ph.key === 'air' ? `<span class="liveln" id="liveLine">${liveLine(f) || 'Looking for live position…'}</span>` : ''}${ph.key === 'air' ? `<div class="bar"><i style="width:${ph.p * 100}%"></i></div>` : ''}</div>
     <div class="leg"><div class="lh"><i>↗</i> <b>${esc(f.from?.iata)}</b> · ${esc(f.from?.name || f.from?.city || '')}</div>
-      <div class="lrow"><div><div class="bigt">${fmtTime(d, f.from?.tz)}</div><div class="muted small">${dl >= 5 ? `<s>${fmtTime(f.depSched, f.from?.tz)}</s> delayed` : 'Scheduled'} · ${fmtDate(d, f.from?.tz)}</div></div>${gate(f.terminalDep, f.gateDep, 'gateDep')}</div></div>
+      <div class="lrow"><div><div class="bigt ${dcls(depDelay(f))}">${fmtTime(d, f.from?.tz)}</div><div class="muted small">${depDelay(f) >= 5 || depDelay(f) <= -1 ? `<s>${fmtTime(f.depSched, f.from?.tz)}</s> <span class="${dcls(depDelay(f))}">${tlabel(depDelay(f), now > d, 'Left')}</span>` : now > d ? 'Departed' : f.updatedLive ? 'On time' : 'Scheduled'} · ${fmtDate(d, f.from?.tz)}</div></div>${gate(f.terminalDep, f.gateDep, 'gateDep')}</div></div>
     <div class="legmid">⏱ ${dur(a - d)}${km ? ` · ${fmtDist(km)}` : ''}${overnight ? ' · ☾ Overnight' : ''}</div>
     <div class="leg"><div class="lh"><i>↘</i> <b>${esc(f.to?.iata)}</b> · ${esc(f.to?.name || f.to?.city || '')}</div>
-      <div class="lrow"><button class="plain" data-act="tile" data-field="arrTime" data-id="${f.id}" data-src="${src}"><div class="bigt">${fmtTime(a, f.to?.tz)}${plus ? `<sup>${plus > 0 ? '+' : ''}${plus}</sup>` : ''}</div><div class="muted small">${f.estArr ? 'Estimated · tap to set' : 'Scheduled'} · ${fmtDate(a, f.to?.tz)}</div></button>${gate(f.terminalArr, f.gateArr, 'gateArr')}</div></div>
+      <div class="lrow"><button class="plain" data-act="tile" data-field="arrTime" data-id="${f.id}" data-src="${src}"><div class="bigt ${dcls(arrDelay(f))}">${fmtTime(a, f.to?.tz)}${plus ? `<sup>${plus > 0 ? '+' : ''}${plus}</sup>` : ''}</div><div class="muted small">${f.estArr ? 'Estimated · tap to set' : arrDelay(f) >= 5 || arrDelay(f) <= -1 ? `<s>${fmtTime(f.arrSched, f.to?.tz)}</s> <span class="${dcls(arrDelay(f))}">${tlabel(arrDelay(f), now > a, 'Landed')}</span>` : now > a ? 'Landed' : f.arrEst ? 'Estimated on time' : f.updatedLive ? 'On time' : 'Scheduled'} · ${fmtDate(a, f.to?.tz)}</div></button>${gate(f.terminalArr, f.gateArr, 'gateArr')}</div></div>
     <div class="tiles">
       ${tile('conf', 'Booking code', f.conf, '🎫')}${tile('seat', 'Seat', f.seat, '💺')}
       ${tile('baggage', 'Baggage belt', f.baggage, '🧳')}${tile('aircraft', 'Aircraft', f.aircraft, '✈︎')}
@@ -729,9 +733,9 @@ function afBody() {
   const legs = r.legs && r.legs.length > 1 ? `<div class="chips">${r.legs.map((l, i) => `<button class="chipbtn ${l.from.iata === r.from.iata ? 'on' : ''}" data-act="af-leg" data-i="${i}">${esc(l.from.iata)} → ${esc(l.to.iata)}</button>`).join('')}</div>` : '';
   b.innerHTML = `${legs}<div class="card result">
     <div class="fr-top">${logo(AF.p.iata)}<span><b style="color:var(--text)">${esc(AF.p.num)}</b> · ${esc(AF.p.airline || r.airline || '')}</span></div>
-    <div class="route"><div class="ap"><div class="code">${esc(r.from.iata)}</div><div class="city">${cityOf(r.from)}</div>${r.full ? `<div class="t">${fmtTime(r.depSched, r.from.tz)}</div>` : ''}</div>
-      <div class="mid">${planeSvg(90, 18)}<div>${r.full ? dur(r.arrSched - r.depSched) : km ? '≈ ' + dur(estDur(r.from, r.to)) : ''}</div><div>${km ? fmtDist(km) : ''}</div></div>
-      <div class="ap right"><div class="code">${esc(r.to.iata)}</div><div class="city" style="margin-left:auto">${cityOf(r.to)}</div>${r.full ? `<div class="t">${fmtTime(r.arrSched, r.to.tz)}</div>` : ''}</div></div>
+    <div class="route"><div class="ap"><div class="code">${esc(r.from.iata)}</div><div class="city">${cityOf(r.from)}</div>${r.full ? rTime(r, 'dep') : ''}</div>
+      <div class="mid">${planeSvg(90, 18)}<div>${r.full ? dur(arrT(r) - depT(r)) : km ? '≈ ' + dur(estDur(r.from, r.to)) : ''}</div><div>${km ? fmtDist(km) : ''}</div></div>
+      <div class="ap right"><div class="code">${esc(r.to.iata)}</div><div class="city" style="margin-left:auto">${cityOf(r.to)}</div>${r.full ? rTime(r, 'arr') : ''}</div></div>
     ${AF.live === 'moved' ? liveNote() : ''}${r.full ? `<div class="srcnote ok">✓ Live schedule${r.status ? ' · ' + esc(r.status) : ''}${r.gateDep ? ' · Gate ' + esc(r.gateDep) : ''}${r.terminalDep ? ' · Terminal ' + esc(r.terminalDep) : ''}</div>`
       : r.src === 'history' ? `<div class="srcnote">Route from your previous ${esc(AF.p.num)} flight · <button class="link inl" data-act="af-change">Change</button></div>`
       : `${liveNote()}<div class="srcnote warn">⚠︎ Route from a public database and may be outdated — check it. <button class="link inl" data-act="af-change">Change airports</button>${S.settings.apiKey ? '' : '<br>For exact times, gates and delays, <button class="link inl" data-act="goto-live">turn on live data</button> (free).'}</div>`}
@@ -758,6 +762,10 @@ async function flightDates(num, date) {
     const j = await r.json(); const arr = Array.isArray(j) ? j : j.items || j.dates || [];
     return [...new Set(arr.map(x => String(typeof x === 'string' ? x : x.date || x.dateLocal || x.scheduledDateLocal || '').slice(0, 10)).filter(x => /^\d{4}-\d\d-\d\d$/.test(x) && x !== date))].sort();
   } catch (e) { return null; }
+}
+function rTime(r, k) {
+  const tz = k === 'dep' ? r.from.tz : r.to.tz, sched = r[k + 'Sched'], t = k === 'dep' ? depT(r) : arrT(r), m = k === 'dep' ? depDelay(r) : arrDelay(r);
+  return `<div class="t ${dcls(m)}">${fmtTime(t, tz)}</div>${m >= 5 || m <= -1 ? `<div class="small muted"><s>${fmtTime(sched, tz)}</s></div>` : ''}`;
 }
 function afTimes(from, to) {
   const pre = AF.pre || {};
