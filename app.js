@@ -307,7 +307,7 @@ function viewSettings() {
       <p class="muted small" style="margin:0">${liveProxy() ? '✓ Using your OpenSky server.' : 'Leave empty unless live position doesn’t show up.'}</p></div>
     <h2>Sync server</h2><div class="card">${syncServerHtml()}</div>
     <h2>Data</h2><div class="card"><div class="actions" style="margin:0"><button class="btn sm" data-act="backup">Download backup</button><button class="btn sm" data-act="restore">Restore backup</button><button class="btn sm danger" data-act="wipe">Delete all data</button></div></div>
-    <p class="muted small" style="text-align:center">Contrail · version 24</p>`;
+    <p class="muted small" style="text-align:center">Contrail · version 25</p>`;
 }
 
 // ---------- Sheets ----------
@@ -487,7 +487,10 @@ function planeCam(map, f, padTop = 0, padBottom = 0) {
 }
 function fitAllCam(map, flights, padTop = 0, padBottom = 0) {
   const pts = []; flights.forEach(f => [f.from, f.to].forEach(a => { if (a?.lat != null) pts.push(a); }));
-  if (!pts.length) return { center: [10, 30], zoom: 1, padding: { top: padTop, bottom: padBottom, left: 0, right: 0 } };
+  if (!pts.length) {
+    const el = map.getContainer(), W = el.clientWidth || innerWidth, visH = Math.max(140, (el.clientHeight || innerHeight) - padTop - padBottom);
+    return { center: [-20, 30], zoom: Math.max(0.4, Math.min(2.2, Math.log2(0.85 * Math.min(W, visH) / 163))), padding: { top: padTop, bottom: padBottom, left: 0, right: 0 } };
+  }
   let x = 0, y = 0, z = 0; pts.forEach(p => { const la = rad(p.lat), lo = rad(p.lon); x += Math.cos(la) * Math.cos(lo); y += Math.cos(la) * Math.sin(lo); z += Math.sin(la); });
   const c = { lat: deg(Math.atan2(z, Math.hypot(x, y))), lon: deg(Math.atan2(y, x)) };
   const spread = Math.max(400, ...pts.map(p => distKm(c, p))) * 2.3;
@@ -541,8 +544,9 @@ async function showRoutes(map, flights, focus, opts = {}) {
     opts.ease ? map.easeTo({ ...cam, duration: 450 }) : map.jumpTo(cam);
     airportDots(map, flights);
   } else if (opts.fitAll) {
-    const pts = flights.flatMap(f => f.from?.lat != null && f.to?.lat != null ? [[f.from.lon, f.from.lat], [f.to.lon, f.to.lat]] : []);
-    if (pts.length) { const lon = pts.reduce((s, p) => s + p[0], 0) / pts.length, lat = pts.reduce((s, p) => s + p[1], 0) / pts.length; map.jumpTo({ center: [lon, lat], zoom: 1.1 }); }
+    // Always pass the current padding so the globe re-centres in the space above the panel
+    const cam = fitAllCam(map, flights, opts.padTop || 0, opts.padBottom || 0);
+    map[opts.ease ? 'easeTo' : 'jumpTo'](opts.ease ? { ...cam, duration: 450 } : cam);
   }
 }
 function globeFallback(box) { if (box) box.classList.add('nomap'); }
@@ -575,7 +579,7 @@ function updateHomeGlobe(ease) {
     if (focus && phase(focus).key === 'air' && !liveFresh(focus)) fetchLivePos(focus).then(ok => { if (ok) { save(false); homeGlobe._key = ''; updateHomeGlobe(); } });
     const key = JSON.stringify(['flights', innerWidth, innerHeight, Math.round(homeVis), ...up.map(f => [f.id, f.from?.iata, f.to?.iata, Math.round(phase(f).p * 50), f.livePos?.t || 0])]);
     if (homeGlobe._key === key) return; homeGlobe._key = key;
-    showRoutes(homeGlobe, focus ? up : live(S.flights), focus, { fitAll: true, ease, padTop: 90, padBottom: homeVis });
+    showRoutes(homeGlobe, focus ? up : live(S.flights).filter(f => phase(f).key !== 'cancel'), focus, { fitAll: true, ease, padTop: 90, padBottom: homeVis });
   } catch (e) { console.warn(e); }
 }
 let worldMap = null;
