@@ -341,6 +341,7 @@ body.home header{background:linear-gradient(180deg,rgba(2,4,10,.55),rgba(2,4,10,
 </style>
 </head>
 <body>
+<div id="vhprobe" aria-hidden="true" style="position:fixed;top:0;left:0;width:1px;height:100vh;visibility:hidden;pointer-events:none"></div>
 <div id="globe" aria-label="Map of your flights"></div>
 <div class="aurora" aria-hidden="true"><i></i><i></i><i></i><i></i></div>
 <header><div class="hdr"><h1 id="title">Flights</h1>
@@ -349,8 +350,8 @@ body.home header{background:linear-gradient(180deg,rgba(2,4,10,.55),rgba(2,4,10,
 <div class="dock" id="dock"><nav class="tabs" id="tabs"></nav><button class="dock-search" id="dockSearch" aria-label="Add a flight"><svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><circle cx="10.5" cy="10.5" r="6.5"/><path d="m20 20-4.6-4.6"/></svg></button></div>
 <input type="file" id="icsFile" accept=".ics,text/calendar" hidden>
 <input type="file" id="backupFile" accept=".json,application/json" hidden>
-<script src="airports.js?v=17"></script>
+<script src="airports.js?v=18"></script>
 <script src="https://unpkg.com/maplibre-gl@5/dist/maplibre-gl.js" defer></script>
-<script src="app.js?v=17"></script>
+<script src="app.js?v=18"></script>
 </body>
 </html>

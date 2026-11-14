@@ -303,7 +303,7 @@ function viewSettings() {
       <p class="muted small" style="margin:0">${liveProxy() ? '✓ Using your OpenSky server.' : 'Leave empty unless live position doesn’t show up.'}</p></div>
     <h2>Sync server</h2><div class="card">${syncServerHtml()}</div>
     <h2>Data</h2><div class="card"><div class="actions" style="margin:0"><button class="btn sm" data-act="backup">Download backup</button><button class="btn sm" data-act="restore">Restore backup</button><button class="btn sm danger" data-act="wipe">Delete all data</button></div></div>
-    <p class="muted small" style="text-align:center">Contrail · version 17</p>`;
+    <p class="muted small" style="text-align:center">Contrail · version 18</p>`;
 }
 
 // ---------- Sheets ----------
@@ -1550,6 +1550,23 @@ function maybeInstallBanner() {
   el.innerHTML = `<img src="apple-touch-icon.png" alt=""><div class="sp"><b>Install Contrail</b><span>Full screen, right from your Home Screen</span></div><button class="btn sm pri" data-act="install">${deferredInstall ? 'Install' : 'How'}</button><button class="x" data-act="inst-dismiss" aria-label="Dismiss">✕</button>`;
   document.body.appendChild(el);
 }
+
+// ---------- iOS Home Screen app: undo the keyboard viewport-shrink bug ----------
+// After the keyboard closes, iOS standalone web apps can stay shorter than the screen (black band at the bottom).
+// Hiding and re-showing full-height elements makes WebKit re-measure the real height.
+let maxVH = innerHeight;
+function healViewport() {
+  if (!isStandalone() || maxVH - innerHeight <= 4) return;
+  const els = ['#vhprobe', '#globe', '#main', '.dock'].map(q => $(q)).filter(Boolean);
+  els.forEach(e => { e.dataset.d = e.style.display; e.style.display = 'none'; });
+  void document.body.offsetHeight;
+  els.forEach(e => { e.style.display = e.dataset.d || ''; });
+  setTimeout(() => { if (maxVH - innerHeight > 4) { document.body.style.display = 'none'; void document.body.offsetHeight; document.body.style.display = ''; } homeGlobe?.resize(); }, 60);
+}
+addEventListener('resize', () => { maxVH = Math.max(maxVH, innerHeight); });
+document.addEventListener('focusout', e => { if (e.target.matches?.('input,textarea,select')) setTimeout(healViewport, 140); });
+document.addEventListener('submit', () => setTimeout(healViewport, 400), true);
+document.addEventListener('visibilitychange', () => { if (!document.hidden) setTimeout(healViewport, 150); });
 
 // ---------- Boot ----------
 let pendingCfg = null;
