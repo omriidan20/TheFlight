@@ -241,7 +241,8 @@ function render() {
   const m = $('#main');
   document.body.classList.toggle('home', tab === 'flights');
   if (tab !== 'flights') $('#hsheet')?.remove();
-  if (tab === 'flights') { renderHome(m); updateHomeGlobe(); }
+  if (tab !== 'flights') $('#instBanner')?.remove();
+  if (tab === 'flights') { renderHome(m); updateHomeGlobe(); setTimeout(maybeInstallBanner, 1500); }
   else if (tab === 'friends') m.innerHTML = viewFriends();
   else if (tab === 'stats') { m.innerHTML = viewStats(); drawWorldMap(); }
   else m.innerHTML = viewSettings();
@@ -283,7 +284,8 @@ function viewSettings() {
   const acct = `<div style="display:flex;gap:14px;align-items:center"><div class="avatar lg" style="${avatarStyle(account.username)}">${esc(initials(account.username))}</div>
       <div style="flex:1;min-width:0"><b style="font-size:18px">${esc(account.username)}</b><div class="muted small">${account.mode === 'cloud' ? (account.google ? '☁︎ Google account · synced' : '☁︎ Synced account') : 'Account on this device'}</div></div></div>
     <div class="actions" style="margin-bottom:0">${account.google ? '' : '<button class="btn sm" data-act="change-pw">Change password</button>'}<button class="btn sm" data-act="signout">Sign out</button><button class="btn sm danger" data-act="delete-account">Delete account</button></div>`;
-  return `<h2>Account</h2><div class="card">${acct}</div>
+  const inst = isStandalone() ? '' : `<h2>App</h2><div class="card"><div style="display:flex;gap:14px;align-items:center"><img src="apple-touch-icon.png" alt="" style="width:52px;height:52px;border-radius:12px"><div style="flex:1"><b>Install Contrail</b><div class="muted small">Add it to your Home Screen to open it full screen, like a regular app.</div></div></div><button class="btn pri block" style="margin-top:12px" data-act="install">${deferredInstall ? 'Install app' : 'Show me how'}</button></div>`;
+  return `${inst}<h2>Account</h2><div class="card">${acct}</div>
     <h2>Profile</h2><div class="card"><label class="f"><span>Your name (shown when you share flights)</span><input id="setName" value="${esc(st.name)}" placeholder="e.g. Omri"></label>
       <label class="f" style="margin:0"><span>Distance units</span><select id="setUnits"><option value="mi" ${st.units === 'mi' ? 'selected' : ''}>Miles</option><option value="km" ${st.units === 'km' ? 'selected' : ''}>Kilometers</option></select></label></div>
     <h2>Calendar</h2><div class="card"><div class="actions" style="margin:0"><button class="btn" data-act="import-ics">Import .ics file</button><button class="btn" data-act="export-ics">Export all to calendar</button></div>
@@ -301,7 +303,7 @@ function viewSettings() {
       <p class="muted small" style="margin:0">${liveProxy() ? '✓ Using your OpenSky server.' : 'Leave empty unless live position doesn’t show up.'}</p></div>
     <h2>Sync server</h2><div class="card">${syncServerHtml()}</div>
     <h2>Data</h2><div class="card"><div class="actions" style="margin:0"><button class="btn sm" data-act="backup">Download backup</button><button class="btn sm" data-act="restore">Restore backup</button><button class="btn sm danger" data-act="wipe">Delete all data</button></div></div>
-    <p class="muted small" style="text-align:center">Contrail · version 16</p>`;
+    <p class="muted small" style="text-align:center">Contrail · version 17</p>`;
 }
 
 // ---------- Sheets ----------
@@ -1470,6 +1472,8 @@ document.addEventListener('click', async e => {
     case 'sync-server': e.preventDefault(); sheet(`${sheetHd('Sync server')}${syncServerHtml()}`); break;
     case 'toggle-pw': { const i = $('#a_pw'); i.type = i.type === 'password' ? 'text' : 'password'; t.textContent = i.type === 'password' ? 'Show' : 'Hide'; break; }
     case 'signout': await signOut(); toast('Signed out'); break;
+    case 'install': $('#instBanner')?.remove(); openInstall(); break;
+    case 'inst-dismiss': localStorage.setItem('contrail.instDismissed', Date.now()); $('#instBanner')?.remove(); break;
     case 'google': signInGoogle(); break;
     case 'change-pw': changePassword(); break;
     case 'delete-account': deleteAccount(); break;
@@ -1516,6 +1520,37 @@ document.addEventListener('keydown', e => {
   }
 });
 
+// ---------- Install (Add to Home Screen) ----------
+const UA = navigator.userAgent;
+const isIOS = /iPhone|iPad|iPod/.test(UA) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+const isStandalone = () => navigator.standalone === true || matchMedia('(display-mode: standalone)').matches;
+let deferredInstall = null;
+addEventListener('beforeinstallprompt', e => { e.preventDefault(); deferredInstall = e; if (account && tab === 'settings') render(); });
+addEventListener('appinstalled', () => { deferredInstall = null; toast('Contrail is installed'); });
+const canInstall = () => !isStandalone() && (isIOS || deferredInstall);
+function installSteps() {
+  const chromeIOS = /CriOS/.test(UA), otherIOS = /FxiOS|EdgiOS|OPiOS/.test(UA);
+  const share = '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:-3px"><path d="M12 15V3M8 7l4-4 4 4"/><path d="M6 11H5a2 2 0 0 0-2 2v6a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-6a2 2 0 0 0-2-2h-1"/></svg>';
+  if (chromeIOS) return [`Tap the <b>Share</b> button ${share} at the right of the address bar.`, 'Scroll down and tap <b>Add to Home Screen</b>.', 'Tap <b>Add</b>.'];
+  if (otherIOS) return [`Open the browser menu and tap <b>Share</b> ${share}.`, 'Tap <b>Add to Home Screen</b>.', 'Tap <b>Add</b>.'];
+  return [`Tap the <b>Share</b> button ${share} in Safari’s toolbar (on newer iPhones it’s inside the <b>•••</b> menu next to the address bar).`, 'Scroll down and tap <b>Add to Home Screen</b>.', 'Keep <b>Open as Web App</b> switched on, then tap <b>Add</b>.'];
+}
+function openInstall() {
+  if (deferredInstall) { deferredInstall.prompt(); deferredInstall.userChoice.finally(() => { deferredInstall = null; render(); }); return; }
+  sheet(`${sheetHd('Install Contrail')}
+    <div class="inst-hero"><img src="apple-touch-icon.png" alt=""><div><b>Contrail on your Home Screen</b><span class="muted small">Opens full screen like a regular app — no browser bars — and keeps you signed in.</span></div></div>
+    <ol class="inst-steps">${installSteps().map(x => `<li>${x}</li>`).join('')}</ol>
+    <p class="muted small">Then open Contrail from its new icon on your Home Screen.</p>
+    <button class="btn pri block" data-act="close">Got it</button>`);
+}
+function maybeInstallBanner() {
+  if (!canInstall() || tab !== 'flights' || $('#instBanner')) return;
+  if (Date.now() - (+localStorage.getItem('contrail.instDismissed') || 0) < 7 * 864e5) return;
+  const el = document.createElement('div'); el.id = 'instBanner'; el.className = 'inst-banner';
+  el.innerHTML = `<img src="apple-touch-icon.png" alt=""><div class="sp"><b>Install Contrail</b><span>Full screen, right from your Home Screen</span></div><button class="btn sm pri" data-act="install">${deferredInstall ? 'Install' : 'How'}</button><button class="x" data-act="inst-dismiss" aria-label="Dismiss">✕</button>`;
+  document.body.appendChild(el);
+}
+
 // ---------- Boot ----------
 let pendingCfg = null;
 function applyCfgLink(c) {
@@ -1542,6 +1577,7 @@ window.addEventListener('hashchange', handleHash);
 })();
 setInterval(() => { if (account && !$('#sheet') && tab !== 'stats' && tab !== 'settings' && document.activeElement?.id !== 'quickNum') render(); }, 30e3);
 setInterval(() => refreshAll(), 10 * M);
+document.body.classList.toggle('standalone', isStandalone());
 document.addEventListener('visibilitychange', () => { if (!document.hidden && account) { if (document.activeElement?.id !== 'quickNum') render(); refreshAll(); } });
 if ('serviceWorker' in navigator && location.protocol === 'https:') navigator.serviceWorker.register('sw.js', { updateViaCache: 'none' }).then(r => r.update()).catch(() => {});
 window.__contrail = { S, parseIcs, detectFlight, importIcsText, zonedToUtc, shareUrl, receiveShare };
