@@ -239,12 +239,13 @@ function render() {
   $('#title').textContent = TITLES[tab];
   const av = $('#hdrAvatar'); av.textContent = initials(account.username); av.setAttribute('style', avatarStyle(account.username));
   const m = $('#main');
-  document.body.classList.toggle('home', tab === 'flights');
-  if (tab !== 'flights') $('#hsheet')?.remove();
+  const globeTab = tab === 'flights' || tab === 'stats';
+  document.body.classList.toggle('home', globeTab);
+  if (!globeTab) $('#hsheet')?.remove();
   if (tab !== 'flights') $('#instBanner')?.remove();
-  if (tab === 'flights') { renderHome(m); updateHomeGlobe(); setTimeout(maybeInstallBanner, 1500); }
+  if (tab === 'flights') { renderHome(m, viewFlights); updateHomeGlobe(); setTimeout(maybeInstallBanner, 1500); }
+  else if (tab === 'stats') { renderHome(m, viewStats); updateHomeGlobe(); }
   else if (tab === 'friends') m.innerHTML = viewFriends();
-  else if (tab === 'stats') { m.innerHTML = viewStats(); drawWorldMap(); }
   else m.innerHTML = viewSettings();
 }
 function viewFriends() {
@@ -303,7 +304,7 @@ function viewSettings() {
       <p class="muted small" style="margin:0">${liveProxy() ? '✓ Using your OpenSky server.' : 'Leave empty unless live position doesn’t show up.'}</p></div>
     <h2>Sync server</h2><div class="card">${syncServerHtml()}</div>
     <h2>Data</h2><div class="card"><div class="actions" style="margin:0"><button class="btn sm" data-act="backup">Download backup</button><button class="btn sm" data-act="restore">Restore backup</button><button class="btn sm danger" data-act="wipe">Delete all data</button></div></div>
-    <p class="muted small" style="text-align:center">Contrail · version 20</p>`;
+    <p class="muted small" style="text-align:center">Contrail · version 21</p>`;
 }
 
 // ---------- Sheets ----------
@@ -428,6 +429,20 @@ function planeCam(map, f, padTop = 0, padBottom = 0) {
   const zoom = Math.max(2, Math.min(6.5, Math.log2(0.9 * Math.min(W, visH * 1.3) * 40075 * Math.cos(rad(pp.lat)) / (spanKm * 512))));
   return { center: [pp.lon, pp.lat], zoom, padding: { top: padTop, bottom: padBottom, left: 0, right: 0 } };
 }
+function fitAllCam(map, flights, padTop = 0, padBottom = 0) {
+  const pts = []; flights.forEach(f => [f.from, f.to].forEach(a => { if (a?.lat != null) pts.push(a); }));
+  if (!pts.length) return { center: [10, 30], zoom: 1, padding: { top: padTop, bottom: padBottom, left: 0, right: 0 } };
+  let x = 0, y = 0, z = 0; pts.forEach(p => { const la = rad(p.lat), lo = rad(p.lon); x += Math.cos(la) * Math.cos(lo); y += Math.cos(la) * Math.sin(lo); z += Math.sin(la); });
+  const c = { lat: deg(Math.atan2(z, Math.hypot(x, y))), lon: deg(Math.atan2(y, x)) };
+  const spread = Math.max(400, ...pts.map(p => distKm(c, p))) * 2.3;
+  const el = map.getContainer(), W = el.clientWidth || innerWidth, visH = Math.max(140, (el.clientHeight || innerHeight) - padTop - padBottom);
+  const zoom = Math.max(0.6, Math.min(5.5, Math.log2(0.95 * Math.min(W, visH * 1.3) * 40075 * Math.cos(rad(c.lat)) / (spread * 512))));
+  return { center: [c.lon, c.lat], zoom, padding: { top: padTop, bottom: padBottom, left: 0, right: 0 } };
+}
+function airportDots(map, flights) {
+  const seen = new Map(); flights.forEach(f => [f.from, f.to].forEach(a => { if (a?.lat != null && a.iata) seen.set(a.iata, a); }));
+  [...seen.values()].slice(0, 60).forEach(a => { const el = document.createElement('div'); el.className = 'gdot'; el.innerHTML = `<i></i><span>${esc(a.city || a.iata)}</span>`; map._markers.push(new (ML().Marker)({ element: el, anchor: 'left', offset: [-4, 0] }).setLngLat([a.lon, a.lat]).addTo(map)); });
+}
 function placePins(map, f) {
   map._pins?.forEach(m => m.remove());
   const pa = map.project([f.from.lon, f.from.lat]), pb = map.project([f.to.lon, f.to.lat]), fromLeft = pa.x <= pb.x;
@@ -460,8 +475,12 @@ async function showRoutes(map, flights, focus, opts = {}) {
   map.getSource('routes').setData({ type: 'FeatureCollection', features: feats });
   map._focus = focus;
   if (focus && focus.from?.lat != null && focus.to?.lat != null) {
-    if (!opts.keepCamera) map.jumpTo(opts.follow && phase(focus).key === 'air' ? planeCam(map, focus, opts.padTop || 0, opts.padBottom || 0) : routeCam(map, focus, opts.padTop || 0, opts.padBottom || 0));
+    if (!opts.keepCamera) map[opts.ease ? 'easeTo' : 'jumpTo'](opts.follow && phase(focus).key === 'air' ? planeCam(map, focus, opts.padTop || 0, opts.padBottom || 0) : routeCam(map, focus, opts.padTop || 0, opts.padBottom || 0));
     placePins(map, focus);
+  } else if (opts.airports) {
+    const cam = fitAllCam(map, flights, opts.padTop || 0, opts.padBottom || 0);
+    opts.ease ? map.easeTo({ ...cam, duration: 450 }) : map.jumpTo(cam);
+    airportDots(map, flights);
   } else if (opts.fitAll) {
     const pts = flights.flatMap(f => f.from?.lat != null && f.to?.lat != null ? [[f.from.lon, f.from.lat], [f.to.lon, f.to.lat]] : []);
     if (pts.length) { const lon = pts.reduce((s, p) => s + p[0], 0) / pts.length, lat = pts.reduce((s, p) => s + p[1], 0) / pts.length; map.jumpTo({ center: [lon, lat], zoom: 1.1 }); }
@@ -476,7 +495,7 @@ function drawFlightMap(el, f) {
 }
 // Home: one persistent full-screen globe behind the flight list
 let homeGlobe = null;
-function updateHomeGlobe() {
+function updateHomeGlobe(ease) {
   const box = $('#globe'); if (!box) return;
   if (!ML()) { setTimeout(() => tab === 'flights' && updateHomeGlobe(), 500); return; }
   try {
@@ -484,14 +503,20 @@ function updateHomeGlobe() {
       homeGlobe = makeGlobe(box, { interactive: true });
       homeGlobe._ready.then(m => m.on('click', 'routes-main', () => homeGlobe._focus && openFlight(homeGlobe._focus)));
     }
+    requestAnimationFrame(() => { try { homeGlobe.resize(); } catch (e) {} });
+    if (tab === 'stats') {
+      const fl = computeStats(statYear).fl, key = JSON.stringify(['stats', statYear, fl.length, innerWidth, innerHeight, Math.round(homeVis)]);
+      if (homeGlobe._key === key) return; homeGlobe._key = key; homeGlobe._focus = null;
+      showRoutes(homeGlobe, fl, null, { airports: true, ease, padTop: 90, padBottom: homeVis }); return;
+    }
     const now = Date.now(), up = live(S.flights).filter(f => arrT(f) > now - 6 * H).sort((a, b) => depT(a) - depT(b));
     const focus = up.find(f => f.from?.lat != null && f.to?.lat != null);
     homeGlobe._focus = focus?.id;
     requestAnimationFrame(() => { try { homeGlobe.resize(); } catch (e) {} });
     if (focus && phase(focus).key === 'air' && !liveFresh(focus)) fetchLivePos(focus).then(ok => { if (ok) { save(false); homeGlobe._key = ''; updateHomeGlobe(); } });
-    const key = JSON.stringify([innerWidth, innerHeight, ...up.map(f => [f.id, f.from?.iata, f.to?.iata, Math.round(phase(f).p * 50), f.livePos?.t || 0])]);
+    const key = JSON.stringify(['flights', innerWidth, innerHeight, Math.round(homeVis), ...up.map(f => [f.id, f.from?.iata, f.to?.iata, Math.round(phase(f).p * 50), f.livePos?.t || 0])]);
     if (homeGlobe._key === key) return; homeGlobe._key = key;
-    showRoutes(homeGlobe, focus ? up : live(S.flights), focus, { fitAll: true, padTop: 90, padBottom: homeVis });
+    showRoutes(homeGlobe, focus ? up : live(S.flights), focus, { fitAll: true, ease, padTop: 90, padBottom: homeVis });
   } catch (e) { console.warn(e); }
 }
 let worldMap = null;
@@ -518,7 +543,8 @@ function viewFlights() {
   return html;
 }
 let homeSnap = 1, homeVis = innerHeight * 0.55;
-function renderHome(m) {
+let sheetTab = null;
+function renderHome(m, view) {
   let sh = $('#hsheet');
   if (!sh) {
     m.innerHTML = `<div class="hsheet" id="hsheet"><div class="hgrab"><div class="grabber"></div></div><div class="hscroll" id="hscroll"></div></div>`;
@@ -526,9 +552,10 @@ function renderHome(m) {
     const dockH = () => ($('#dock')?.offsetHeight || 80) + 24;
     sheetDrag({ sheet: sh, scroll: $('#hscroll'), grab: sh.querySelector('.hgrab'), start: homeSnap,
       snaps: () => [0, Math.max(0, sh.offsetHeight - innerHeight * 0.55), Math.max(0, sh.offsetHeight - dockH() - 150)],
-      onSnap: (vis, idx) => { homeSnap = idx < 0 ? homeSnap : idx; homeVis = vis; if (homeGlobe?._focus) { const f = S.flights.find(x => x.id === homeGlobe._focus); if (f) { homeGlobe.easeTo({ ...routeCam(homeGlobe, f, 90, vis), duration: 420 }); setTimeout(() => placePins(homeGlobe, f), 440); } } } });
+      onSnap: (vis, idx) => { homeSnap = idx < 0 ? homeSnap : idx; homeVis = vis; if (homeGlobe) { homeGlobe._key = ''; updateHomeGlobe(true); } } });
   }
-  $('#hscroll').innerHTML = viewFlights();
+  const sc = $('#hscroll'); sc.innerHTML = view();
+  if (sheetTab !== tab) { sc.scrollTop = 0; sheetTab = tab; }
 }
 const dayDiff = f => { const a = localDate(arrT(f), f.to?.tz), d = localDate(depT(f), f.from?.tz); return Math.round((Date.parse(a) - Date.parse(d)) / 864e5); };
 const cityOf = a => esc(a?.city || a?.name || a?.iata || '???');
@@ -593,7 +620,7 @@ function viewStats() {
   if (lost > 0) html += `<div class="pcard p2"><b class="hugeN">${lost >= 60 ? Math.round(lost / 60) : lost}</b><div class="pt">${lost >= 60 ? 'hours' : 'minutes'} lost to delays</div><div class="ps">Delayed flights averaged ${dur(lost / delayed.length * M)} late</div></div>`;
   if (s.aircraft[0]) html += `<div class="pcard p3"><div class="pt">Most flown aircraft</div><b class="bigN">${esc(s.aircraft[0][0])}</b><div class="ps">${s.aircraft[0][1]} flight${s.aircraft[0][1] > 1 ? 's' : ''}</div></div>`;
   if (s.longest) html += `<div class="pcard p4"><div class="pt">Longest flight</div><b class="bigN">${esc(s.longest.f.from?.iata)} → ${esc(s.longest.f.to?.iata)}</b><div class="ps">${fmtDist(s.longest.d)} · ${esc(s.longest.f.num)}</div></div>`;
-  html += `<h2>Your routes</h2><div class="map big" id="worldMap"></div>
+  html += `
     <h2>Top airlines</h2><div class="card">${list(s.airlines, 'No flights yet')}</div>
     <h2>Top routes</h2><div class="card">${list(s.routes, 'No flights yet')}</div>`;
   return html;
