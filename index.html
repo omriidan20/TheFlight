@@ -125,7 +125,7 @@ input[type=date]::-webkit-calendar-picker-indicator,input[type=time]::-webkit-ca
 .toast{position:fixed;left:50%;bottom:calc(100px + env(safe-area-inset-bottom));transform:translateX(-50%);padding:11px 18px;border-radius:999px;z-index:60;font-weight:600;white-space:nowrap;background:rgba(40,48,72,.7);animation:up .25s}
 .chk{display:flex;gap:12px;align-items:center;padding:12px;border-bottom:1px solid var(--stroke-lo)}
 .chk:last-child{border:0}
-.chk input{width:22px;height:22px;accent-color:#a8cfc5;box-shadow:none}
+.chk input{width:22px;height:22px;accent-color:#a8cfc5;box-shadow:none;-webkit-appearance:checkbox;appearance:auto;flex:none;padding:0;margin:0;border-radius:6px;background:none}
 .seg{display:flex;border-radius:999px;padding:4px;margin-bottom:14px}
 .seg button{flex:1;border:0;background:none;padding:8px;border-radius:999px;color:var(--mute);cursor:pointer;font-weight:600;font-size:14px;transition:all .25s}
 .seg button.on{background:rgba(255,255,255,.17);color:var(--text);box-shadow:0 1px 0 rgba(255,255,255,.35) inset,0 4px 12px rgba(0,0,0,.25)}
@@ -354,6 +354,10 @@ body.home header{background:linear-gradient(180deg,rgba(2,4,10,.55),rgba(2,4,10,
 /* soft fade behind the tab bar so content never shows through it */
 body.authed::after{content:"";position:fixed;left:0;right:0;bottom:0;height:calc(118px + env(safe-area-inset-bottom));z-index:25;pointer-events:none;
   background:linear-gradient(180deg,rgba(6,8,16,0) 0%,rgba(6,8,16,.78) 45%,rgba(6,8,16,.94) 100%)}
+/* calendar */
+.sep{height:1px;background:var(--stroke);margin:16px -2px}
+a.btn{display:inline-flex;align-items:center;justify-content:center;text-decoration:none;color:inherit}a.btn.pri{color:#132522}
+.calchip{display:block;width:100%;margin:0 0 12px;padding:11px 14px;border-radius:16px;border:1px solid var(--stroke);background:rgba(168,207,197,.10);color:var(--text);font:inherit;font-size:14px;font-weight:600;text-align:left;cursor:pointer}
 /* Face ID lock */
 #lock{position:fixed;inset:0;z-index:200;display:grid;place-items:center;background:rgba(6,9,18,.72);-webkit-backdrop-filter:blur(28px) saturate(120%);backdrop-filter:blur(28px) saturate(120%);animation:lockin .25s ease both}
 #lock.out{animation:lockout .25s ease both}
@@ -373,8 +377,8 @@ body.authed::after{content:"";position:fixed;left:0;right:0;bottom:0;height:calc
 <div class="dock" id="dock"><nav class="tabs" id="tabs"></nav><button class="dock-search" id="dockSearch" aria-label="Add a flight"><svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><circle cx="10.5" cy="10.5" r="6.5"/><path d="m20 20-4.6-4.6"/></svg></button></div>
 <input type="file" id="icsFile" accept=".ics,text/calendar" hidden>
 <input type="file" id="backupFile" accept=".json,application/json" hidden>
-<script src="airports.js?v=29"></script>
+<script src="airports.js?v=30"></script>
 <script src="https://unpkg.com/maplibre-gl@5/dist/maplibre-gl.js" defer></script>
-<script src="app.js?v=29"></script>
+<script src="app.js?v=30"></script>
 </body>
 </html>

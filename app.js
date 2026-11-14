@@ -34,7 +34,7 @@ function save(sync = true) {
   if (!account) return;
   try { localStorage.setItem(dataKey(), JSON.stringify(S)); } catch (e) {}
   if (sync) schedulePush();
-  scheduleReminders(); scheduleAlertSync();
+  scheduleReminders(); scheduleAlertSync(); scheduleCalSync();
 }
 const live = arr => arr.filter(f => !f.deleted);
 const uid = () => Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
@@ -294,8 +294,15 @@ function viewSettings() {
   return `${inst}<h2>Account</h2><div class="card">${acct}</div>
     <h2>Profile</h2><div class="card"><label class="f"><span>Your name (shown when you share flights)</span><input id="setName" value="${esc(st.name)}" placeholder="e.g. Omri"></label>
       <label class="f" style="margin:0"><span>Distance units</span><select id="setUnits"><option value="mi" ${st.units === 'mi' ? 'selected' : ''}>Miles</option><option value="km" ${st.units === 'km' ? 'selected' : ''}>Kilometers</option></select></label></div>
-    <h2>Calendar</h2><div class="card"><div class="actions" style="margin:0"><button class="btn pri" data-act="gcal">Import from Google Calendar</button><button class="btn" data-act="import-ics-file">Import .ics file</button><button class="btn" data-act="export-ics">Export all to calendar</button></div>
-      <p class="muted small" style="margin-bottom:0">Finds flights in your calendars automatically, including the ones Gmail adds. Read-only.</p></div>
+    <h2>Calendar</h2><div class="card">${st.calFeed && feedUrl() ? `<p class="small" style="margin:0 0 10px">✓ <b>Contrail Flights calendar is on.</b> Your flights stay up to date in your calendar.</p>
+        <div class="actions" style="margin:0"><button class="btn sm pri" data-act="cal-feed">Add to a calendar</button><button class="btn sm" data-act="cal-off">Turn off</button></div>`
+      : `<b>Show flights in your iPhone calendar</b><p class="muted small" style="margin:6px 0 10px">Adds a “Contrail Flights” calendar that updates by itself with delays, terminals and gates. Works with iCloud and Google.</p><button class="btn pri" data-act="cal-on">Turn on calendar sync</button>`}
+      <div class="sep"></div>
+      <b>Find flights in Google Calendar</b><p class="muted small" style="margin:6px 0 10px">Including the ones Gmail adds from confirmation emails. Read-only.</p>
+      <div class="actions" style="margin:0"><button class="btn sm" data-act="gcal">Import now</button></div>
+      <label class="chk"><input type="checkbox" id="gcalAuto" ${st.gcalAuto ? 'checked' : ''}><div style="flex:1"><b>Add new flights automatically</b><div class="muted small">Checks when you open Contrail${st.gcalLast ? ' · last checked ' + fmtDate(st.gcalLast, DEVICE_TZ, { month: 'short', day: 'numeric' }) + ' ' + fmtTime(st.gcalLast, DEVICE_TZ) : ''}</div></div></label>
+      <div class="sep"></div>
+      <div class="actions" style="margin:0"><button class="btn sm" data-act="import-ics-file">Import .ics file</button><button class="btn sm" data-act="export-ics">Export .ics file</button></div></div>
     <h2>Flight alerts</h2><div class="card">${alertsOn() ? `<p class="small" style="margin:0 0 10px">✓ <b>On for this device.</b> Gate changes, delays, cancellations, take-off and landing — even when Contrail is closed.</p>
         <label class="chk"><input type="checkbox" id="pushLive" ${st.pushLive !== false ? 'checked' : ''}><div style="flex:1"><b>Live in-flight updates</b><div class="muted small">About once an hour: time left, distance and altitude</div></div></label>
         <label class="chk"><input type="checkbox" id="pushFriends" ${st.pushFriends !== false ? 'checked' : ''}><div style="flex:1"><b>Friends’ flights</b><div class="muted small">Take-off and landing for flights friends shared with you</div></div></label>
@@ -307,11 +314,11 @@ function viewSettings() {
     ${isAdmin ? `<h2>Admin</h2><div class="card" id="adminCard"><div class="muted small">Loading members…</div></div>
     <h2>System settings</h2><div class="card">
       <label class="f"><span>AeroDataBox key (RapidAPI)</span><div class="pw"><input id="sysKey" type="password" value="${esc(SYS.adbKey || '')}" autocomplete="off" autocapitalize="none" spellcheck="false"><button type="button" data-act="sys-show">Show</button></div></label>
-      <label class="f"><span>Live position server (optional)</span><input id="sysLive" value="${esc(SYS.liveProxy || '')}" placeholder="https://contrail-live.you.workers.dev" autocomplete="off" autocapitalize="none" spellcheck="false"></label>
+      <label class="f"><span>Contrail server (Cloudflare worker — calendar sync and live positions)</span><input id="sysLive" value="${esc(SYS.liveProxy || '')}" placeholder="https://contrail-live.you.workers.dev" autocomplete="off" autocapitalize="none" spellcheck="false"></label>
       <div class="actions" style="margin:0"><button class="btn pri sm" data-act="sys-save">Save for everyone</button><button class="btn sm" data-act="test-key">Test key</button></div>
       <p class="muted small" style="margin-bottom:0">Only you can see or change these. Every member uses them.</p></div>` : ''}
     <h2>Data</h2><div class="card"><div class="actions" style="margin:0"><button class="btn sm" data-act="backup">Download backup</button><button class="btn sm" data-act="restore">Restore backup</button><button class="btn sm danger" data-act="wipe">Delete all data</button></div></div>
-    <p class="muted small" style="text-align:center">Contrail · version 29</p>`;
+    <p class="muted small" style="text-align:center">Contrail · version 30</p>`;
 }
 
 // ---------- Sheets ----------
@@ -599,7 +606,7 @@ function viewFlights() {
   const up = all.filter(f => arrT(f) > now - 6 * H).sort((a, b) => depT(a) - depT(b));
   const past = all.filter(f => arrT(f) <= now - 6 * H).sort((a, b) => depT(b) - depT(a));
   const list = up;
-  let html = `<div class="listhd"><b>Upcoming</b>${past.length ? `<button class="link" data-tab="stats">${past.length} past flight${past.length > 1 ? 's' : ''} in Passport ›</button>` : ''}</div>`;
+  let html = (gcalDue() ? `<button class="calchip" data-act="gcal-auto">📅 Check Google Calendar for new flights</button>` : '') + `<div class="listhd"><b>Upcoming</b>${past.length ? `<button class="link" data-tab="stats">${past.length} past flight${past.length > 1 ? 's' : ''} in Passport ›</button>` : ''}</div>`;
   if (!list.length) {
     html += `<div class="empty hempty"><p>No upcoming flights yet.</p>
       <div class="actions" style="justify-content:center"><button class="btn pri sm" data-act="add">Add a flight</button><button class="btn sm" data-act="import-ics">Import from calendar</button></div></div>`;
@@ -1340,14 +1347,64 @@ function confirmIcs() {
   save(); closeSheet(); tab = 'flights'; render(); toast(`Imported ${picks.length} flight${picks.length === 1 ? '' : 's'}`);
   if (SYS.adbKey) refreshAll();
 }
-function icsFor(flights) {
+function icsFor(flights, feed) {
   const z = ts => new Date(ts).toISOString().replace(/[-:]/g, '').replace(/\.\d+/, '');
   const escI = s => String(s || '').replace(/([,;\\])/g, '\\$1').replace(/\n/g, '\\n');
-  const body = flights.map(f => ['BEGIN:VEVENT', `UID:${f.id}@contrail`, `DTSTAMP:${z(Date.now())}`, `DTSTART:${z(depT(f))}`, `DTEND:${z(arrT(f))}`,
-    `SUMMARY:${escI(`✈ ${f.num} ${f.from?.iata} → ${f.to?.iata}`)}`, `LOCATION:${escI(`${f.from?.name || ''} (${f.from?.iata})`)}`,
-    `DESCRIPTION:${escI(`${f.airline || ''} ${f.num}\n${f.from?.iata} ${fmtTime(depT(f), f.from?.tz)} → ${f.to?.iata} ${fmtTime(arrT(f), f.to?.tz)}${f.seat ? '\nSeat ' + f.seat : ''}${f.conf ? '\nConfirmation ' + f.conf : ''}`)}`,
-    'BEGIN:VALARM', 'TRIGGER:-PT3H', 'ACTION:DISPLAY', 'DESCRIPTION:Time to head to the airport', 'END:VALARM', 'END:VEVENT'].join('\r\n'));
-  return ['BEGIN:VCALENDAR', 'VERSION:2.0', 'PRODID:-//Contrail//Flights//EN', 'CALSCALE:GREGORIAN', ...body, 'END:VCALENDAR'].join('\r\n');
+  const fold = l => { const out = []; while (l.length > 73) { out.push(l.slice(0, 73)); l = ' ' + l.slice(73); } out.push(l); return out.join('\r\n'); };
+  const body = flights.map(f => {
+    const ph = phase(f), dd = depDelay(f), cancel = ph.key === 'cancel';
+    const where = [f.from?.name ? `${f.from.name} (${f.from.iata})` : f.from?.iata, f.terminalDep && 'Terminal ' + f.terminalDep, f.gateDep && 'Gate ' + f.gateDep].filter(Boolean).join(' · ');
+    const status = cancel ? 'Canceled' : ph.key === 'divert' ? ph.label : f.arrActual ? 'Landed' : dd >= 5 ? `Delayed ${dur(dd * M)}` : dd <= -1 ? `${dur(-dd * M)} early` : 'On time';
+    const lines = [`${f.airline || airlineOf(f.num) || ''} ${f.num} · ${status}`.trim(),
+      `Departs ${f.from?.iata} ${fmtTime(depT(f), f.from?.tz)}${f.terminalDep ? ' · T' + f.terminalDep : ''}${f.gateDep ? ' · Gate ' + f.gateDep : ''}`,
+      `Arrives ${f.to?.iata} ${fmtTime(arrT(f), f.to?.tz)}${f.terminalArr ? ' · T' + f.terminalArr : ''}${f.gateArr ? ' · Gate ' + f.gateArr : ''}${f.baggage ? ' · Belt ' + f.baggage : ''}`,
+      `Flight time ${dur(arrT(f) - depT(f))}`, f.aircraft && 'Aircraft ' + f.aircraft, f.seat && 'Seat ' + f.seat, f.conf && 'Confirmation ' + f.conf,
+      feed && `Updated by Contrail ${new Date().toUTCString().slice(5, 22)} UTC`].filter(Boolean).join('\n');
+    return ['BEGIN:VEVENT', `UID:${f.id}@contrail`, `DTSTAMP:${z(Date.now())}`, `LAST-MODIFIED:${z(f.updatedAt || Date.now())}`, `DTSTART:${z(depT(f))}`, `DTEND:${z(arrT(f))}`,
+      `SUMMARY:${escI(`${cancel ? 'Canceled: ' : ''}✈ ${f.num} ${f.from?.iata} → ${f.to?.iata}${dd >= 15 && !cancel && !f.arrActual ? ` (${dur(dd * M)} late)` : ''}`)}`,
+      `LOCATION:${escI(where)}`, `DESCRIPTION:${escI(lines)}`, cancel ? 'STATUS:CANCELLED' : 'STATUS:CONFIRMED', 'TRANSP:OPAQUE',
+      ...(f.from?.lat != null ? [`GEO:${(+f.from.lat).toFixed(4)};${(+f.from.lon).toFixed(4)}`] : []),
+      ...(depT(f) > Date.now() && !cancel ? ['BEGIN:VALARM', 'TRIGGER:-PT3H', 'ACTION:DISPLAY', `DESCRIPTION:${escI(`Leave for ${f.from?.iata}: ${f.num} departs ${fmtTime(depT(f), f.from?.tz)}`)}`, 'END:VALARM'] : []),
+      'END:VEVENT'].map(fold).join('\r\n');
+  });
+  const head = ['BEGIN:VCALENDAR', 'VERSION:2.0', 'PRODID:-//Contrail//Flights//EN', 'CALSCALE:GREGORIAN', 'METHOD:PUBLISH'];
+  if (feed) head.push('X-WR-CALNAME:Contrail Flights', 'X-WR-CALDESC:Your flights from Contrail, kept up to date', 'X-APPLE-CALENDAR-COLOR:#A8CFC5', 'REFRESH-INTERVAL;VALUE=DURATION:PT15M', 'X-PUBLISHED-TTL:PT15M');
+  return [...head, ...body, 'END:VCALENDAR'].join('\r\n');
+}
+// ---------- Live calendar feed (iPhone / Google Calendar subscription) ----------
+let calSig = '', calTimer = null;
+const feedBase = () => (SYS.liveProxy || '').replace(/\/+$/, '');
+const feedUrl = () => feedBase() && S.settings.calToken ? `${feedBase()}/cal/${S.settings.calToken}.ics` : '';
+const webcalUrl = () => feedUrl().replace(/^https?:/, 'webcal:');
+async function syncCalFeed(force) {
+  if (!S.settings.calFeed || !S.settings.calToken || !user || !fb) return;
+  const now = Date.now();
+  const fl = live(S.flights).filter(f => f.depSched && arrT(f) > now - 365 * 864e5 && /^[A-Z0-9]{2,3}\d+/.test(f.num || ''));
+  const ics = icsFor(fl, true), sig = ics.replace(/^(DTSTAMP|DESCRIPTION).*$/gm, '') + fl.map(f => f.updatedAt).join();
+  if (!force && sig === calSig) return;
+  try { await fb.db.collection('cal').doc(S.settings.calToken).set({ uid: user.uid, ics, t: now }); calSig = sig; } catch (e) { console.warn('calendar feed', e); }
+}
+const scheduleCalSync = () => { clearTimeout(calTimer); calTimer = setTimeout(syncCalFeed, 3000); };
+async function enableCalFeed() {
+  if (!user) return toast('Sign in with Google first');
+  if (!feedBase()) return toast(isAdmin ? 'Add the Contrail server first (System settings below)' : 'The admin hasn’t set up calendar sync yet', 3600);
+  S.settings.calToken ||= b64u(crypto.getRandomValues(new Uint8Array(18)));
+  S.settings.calFeed = true; save(); await syncCalFeed(true); render(); openCalFeed();
+}
+async function disableCalFeed() {
+  if (!confirm('Stop the Contrail Flights calendar? Subscribed calendars will stop updating.')) return;
+  const tk = S.settings.calToken; S.settings.calFeed = false; S.settings.calToken = ''; save(); render();
+  try { await fb.db.collection('cal').doc(tk).delete(); } catch (e) {}
+  toast('Calendar sync is off — you can delete “Contrail Flights” from your Calendar app');
+}
+function openCalFeed() {
+  sheet(`${sheetHd('Contrail Flights calendar')}
+    <p class="muted small" style="margin:-4px 4px 12px">A calendar that always shows your flights with the latest times, terminals and gates. Your phone checks it for changes on its own.</p>
+    <div class="card"><a class="btn pri block" href="${esc(webcalUrl())}">Add to iPhone Calendar</a>
+      <p class="muted small" style="margin:10px 2px 0">Tap <b>Subscribe</b>, then <b>Add</b>. Tip: in the Calendar app → Calendars → ⓘ next to Contrail Flights, you can pick its colour and turn on alerts.</p></div>
+    <div class="card"><a class="btn block" target="_blank" rel="noopener" href="https://calendar.google.com/calendar/r?cid=${encodeURIComponent(webcalUrl())}">Add to Google Calendar</a>
+      <p class="muted small" style="margin:10px 2px 0">Google refreshes subscribed calendars every few hours.</p></div>
+    <div class="card"><button class="btn block" data-act="cal-copy">Copy calendar link</button><p class="muted small" style="margin:10px 2px 0">Private link — anyone who has it can see your flights. Turning the calendar off and on again makes a new link.</p></div>`);
 }
 function download(name, text, type) {
   const a = document.createElement('a'); a.href = URL.createObjectURL(new Blob([text], { type })); a.download = name;
@@ -1506,7 +1563,7 @@ async function disableAlerts() {
 
 // ---------- Google Calendar ----------
 const GCAL_SCOPE = 'https://www.googleapis.com/auth/calendar.readonly';
-let gcalToken = null;
+let gcalToken = readJSON('contrail.gcalTok', null);
 async function gcalAuth() {
   if (gcalToken && gcalToken.exp > Date.now()) return gcalToken.t;
   const prov = new firebase.auth.GoogleAuthProvider(); prov.addScope(GCAL_SCOPE); prov.setCustomParameters({ login_hint: user?.email || '' });
@@ -1517,7 +1574,7 @@ async function gcalAuth() {
     throw e;
   }
   const t = res?.credential?.accessToken; if (!t) throw new Error('Google didn’t share calendar access');
-  gcalToken = { t, exp: Date.now() + 50 * M }; return t;
+  gcalToken = { t, exp: Date.now() + 50 * M }; try { localStorage.setItem('contrail.gcalTok', JSON.stringify(gcalToken)); } catch (e) {} return t;
 }
 async function gcalFetch(path, t) {
   const r = await fetch('https://www.googleapis.com/calendar/v3/' + path, { headers: { Authorization: 'Bearer ' + t } });
@@ -1528,7 +1585,7 @@ async function gcalFetch(path, t) {
 }
 const gEvent = ev => ({ SUMMARY: { val: ev.summary || '' }, LOCATION: { val: ev.location || '' }, DESCRIPTION: { val: (ev.description || '').replace(/<[^>]+>/g, ' ') }, UID: { val: 'g:' + (ev.iCalUID || ev.id) },
   _dep: Date.parse(ev.start?.dateTime || ''), _arr: Date.parse(ev.end?.dateTime || '') });
-async function importGoogleCalendar(token) {
+async function importGoogleCalendar(token, auto) {
   if (!user || !fb) return toast('Sign in with Google first');
   const btns = document.querySelectorAll('[data-act=gcal]'); btns.forEach(b => { b.disabled = true; b.dataset.l = b.textContent; b.textContent = 'Reading calendar…'; });
   try {
@@ -1545,10 +1602,25 @@ async function importGoogleCalendar(token) {
     }));
     const seen = new Set(), found = evs.map(gEvent).map(detectFlight).filter(Boolean).filter(c => { const k = c.num + '|' + Math.round(c.depSched / H); if (seen.has(k)) return false; seen.add(k); return true; })
       .sort((a, b) => b.depSched - a.depSched);
-    showFound(found, `Google Calendar (${cals.length} calendar${cals.length === 1 ? '' : 's'}, ${evs.length} events checked)`);
-  } catch (e) { if (!/popup-closed|cancelled-popup/.test(e.code || '')) toast(e.message || 'Couldn’t read Google Calendar', 4200); }
+    S.settings.gcalLast = Date.now();
+    if (auto) {
+      const known = c => S.flights.some(f => (c.calUid && f.calUid === c.calUid) || (f.num === c.num && Math.abs(f.depSched - c.depSched) < 6 * H));
+      const add = found.filter(c => arrT(c) > Date.now() && !known(c) && c.from.iata !== '???');
+      add.forEach(c => S.flights.push(Object.assign({ id: uid(), updatedAt: Date.now() }, c)));
+      save(); render(); if (add.length) { toast(`Added ${add.length} flight${add.length > 1 ? 's' : ''} from Google Calendar`); if (SYS.adbKey) refreshAll(); }
+      else if (!token) toast('Google Calendar checked — no new flights');
+      return;
+    }
+    save(false); showFound(found, `Google Calendar (${cals.length} calendar${cals.length === 1 ? '' : 's'}, ${evs.length} events checked)`);
+  } catch (e) { if (!auto && !/popup-closed|cancelled-popup/.test(e.code || '')) toast(e.message || 'Couldn’t read Google Calendar', 4200); }
   finally { btns.forEach(b => { b.disabled = false; b.textContent = b.dataset.l || 'Google Calendar'; }); }
 }
+function maybeAutoCalendar() {
+  if (!S.settings.gcalAuto || !user) return;
+  if (Date.now() - (S.settings.gcalLast || 0) < 6 * H) return;
+  if (gcalToken && gcalToken.exp > Date.now()) importGoogleCalendar(gcalToken.t, true);
+}
+const gcalDue = () => S.settings.gcalAuto && Date.now() - (S.settings.gcalLast || 0) > 24 * H && !(gcalToken && gcalToken.exp > Date.now());
 function openCalImport() {
   sheet(`${sheetHd('Import from calendar')}
     <div class="card"><button class="btn pri block" data-act="gcal"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" style="vertical-align:-3px;margin-right:6px"><rect x="3" y="5" width="18" height="16" rx="3"/><path d="M3 10h18M8 3v4M16 3v4"/></svg>Google Calendar</button>
@@ -1693,7 +1765,7 @@ function startSession(acc) {
   document.body.classList.add('authed'); render(); scheduleReminders(); refreshAll();
   if (pendingShare) { const p = pendingShare; pendingShare = null; receiveShare(p); }
   if (pendingCfg) { const c = pendingCfg; pendingCfg = null; setTimeout(() => applyCfgLink(c), 300); }
-  if (acc.mode === 'cloud') pull().then(() => syncAlerts(true));
+  if (acc.mode === 'cloud') pull().then(() => { syncAlerts(true); syncCalFeed(true); maybeAutoCalendar(); });
   showLock();
   if (sessionStorage.getItem('contrail.gcal') && fb) { sessionStorage.removeItem('contrail.gcal'); fb.auth.getRedirectResult().then(r => { const t = r?.credential?.accessToken; if (t) { gcalToken = { t, exp: Date.now() + 50 * M }; importGoogleCalendar(t); } }).catch(() => {}); }
   if (isAdmin) loadMembers().then(ms => { const n = ms.filter(m => m.status === 'pending').length; if (n) toast(`${n} ${n > 1 ? 'people are' : 'person is'} waiting for approval — see Settings`, 4000); }).catch(() => {});
@@ -1780,7 +1852,7 @@ async function pull() {
   try {
     const doc = await fb.db.collection('users').doc(user.uid).get();
     if (doc.exists) { const d = doc.data(); S.flights = mergeList(S.flights, d.flights); S.friends = mergeList(S.friends, d.friends); if (!S.settings.name && d.name) S.settings.name = d.name; if (isAdmin && !SYS.adbKey && (d.apiKey || S.settings.apiKey)) { await saveSys({ adbKey: d.apiKey || S.settings.apiKey, liveProxy: SYS.liveProxy || d.liveProxy || S.settings.liveProxy || '' }); toast('Live-data key moved to system settings'); }
-      delete S.settings.apiKey; delete S.settings.liveProxy; if (d.units) S.settings.units = d.units; }
+      delete S.settings.apiKey; delete S.settings.liveProxy; if (d.units) S.settings.units = d.units; if (d.calToken && !S.settings.calToken) { S.settings.calToken = d.calToken; S.settings.calFeed = !!d.calFeed; } if (d.gcalAuto && S.settings.gcalAuto == null) S.settings.gcalAuto = true; }
     
     save(false); await push(); render();
   } catch (e) { console.error(e); toast('Sync failed: ' + (e.code || e.message)); }
@@ -1788,7 +1860,7 @@ async function pull() {
 const clean = o => JSON.parse(JSON.stringify(o));
 async function push() {
   if (!fb || !user) return;
-  try { await fb.db.collection('users').doc(user.uid).set(clean({ flights: S.flights, friends: S.friends, name: S.settings.name || '', units: S.settings.units || 'mi', updatedAt: Date.now() })); }
+  try { await fb.db.collection('users').doc(user.uid).set(clean({ flights: S.flights, friends: S.friends, name: S.settings.name || '', units: S.settings.units || 'mi', calFeed: !!S.settings.calFeed, calToken: S.settings.calToken || '', gcalAuto: !!S.settings.gcalAuto, updatedAt: Date.now() })); }
   catch (e) { console.error(e); }
 }
 function schedulePush() { if (!user) return; clearTimeout(pushTimer); pushTimer = setTimeout(push, 1200); }
@@ -1844,6 +1916,11 @@ document.addEventListener('click', async e => {
     case 'import-ics': openCalImport(); break;
     case 'import-ics-file': $('#icsFile').click(); break;
     case 'gcal': importGoogleCalendar(); break;
+    case 'gcal-auto': importGoogleCalendar(null, true); break;
+    case 'cal-on': enableCalFeed(); break;
+    case 'cal-off': disableCalFeed(); break;
+    case 'cal-feed': openCalFeed(); break;
+    case 'cal-copy': try { await navigator.clipboard.writeText(feedUrl()); toast('Calendar link copied'); } catch (err) { prompt('Copy this link', feedUrl()); } break;
     case 'alerts-on': enableAlerts(); break;
     case 'alerts-off': disableAlerts(); break;
     case 'lock-on': enableLock(); break;
@@ -1898,6 +1975,7 @@ document.addEventListener('change', e => {
 });
 document.addEventListener('change', e => {
   if (e.target.id === 'pushLive' || e.target.id === 'pushFriends') { S.settings[e.target.id] = e.target.checked; save(false); syncAlerts(); }
+  if (e.target.id === 'gcalAuto') { S.settings.gcalAuto = e.target.checked; save(); if (e.target.checked && !(gcalToken && gcalToken.exp > Date.now())) importGoogleCalendar(null, true); else maybeAutoCalendar(); }
 });
 $('#icsFile').addEventListener('change', async e => { const f = e.target.files[0]; if (f) importIcsText(await f.text()); e.target.value = ''; });
 $('#backupFile').addEventListener('change', async e => {
@@ -2001,7 +2079,7 @@ window.addEventListener('hashchange', handleHash);
 setInterval(() => { if (account && !$('#sheet') && tab !== 'stats' && tab !== 'settings' && document.activeElement?.id !== 'quickNum') render(); }, 30e3);
 setInterval(() => refreshAll(), 10 * M);
 document.body.classList.toggle('standalone', isStandalone());
-document.addEventListener('visibilitychange', () => { if (!document.hidden && account) { if (document.activeElement?.id !== 'quickNum') render(); refreshAll(); } });
+document.addEventListener('visibilitychange', () => { if (!document.hidden && account) { if (document.activeElement?.id !== 'quickNum') render(); refreshAll(); maybeAutoCalendar(); } });
 if ('serviceWorker' in navigator && location.protocol === 'https:') navigator.serviceWorker.register('sw.js', { updateViaCache: 'none' }).then(r => r.update()).catch(() => {});
 navigator.serviceWorker?.addEventListener('message', e => { if (e.data?.open && account) { location.hash = 'open=' + e.data.open; } });
 window.__contrail = { sealForServer, alertFlights, gEvent, goTab, dayNightTile, subsolar, S, parseIcs, detectFlight, importIcsText, zonedToUtc, shareUrl, receiveShare };
