@@ -310,8 +310,12 @@ body.home .maplibregl-ctrl-bottom-right{bottom:auto;top:calc(52px + env(safe-are
 nav.tabs{width:auto}
 .dock-search{flex:none;width:64px;height:64px;border-radius:50%;display:grid;place-items:center;cursor:pointer;color:var(--text);background:rgba(255,255,255,.09);-webkit-backdrop-filter:var(--blur);backdrop-filter:var(--blur);border:1px solid var(--stroke);box-shadow:var(--shadow);transition:transform .15s}
 .dock-search:active{transform:scale(.93)}
-html,body{height:100%}
-body.home{overflow:hidden;background:#02040a}
+html{height:100%}
+body{min-height:100%}
+body.home{background:#02040a}
+html:has(body.home){background:#02040a}
+html,body{overscroll-behavior:none}
+body.home main{min-height:100lvh}
 body.home main{padding:0;max-width:none}
 body.home header{background:linear-gradient(180deg,rgba(2,4,10,.55),rgba(2,4,10,0));-webkit-backdrop-filter:none;backdrop-filter:none;-webkit-mask-image:none;mask-image:none}
 .hsheet{position:fixed;z-index:5;left:0;right:0;bottom:0;margin:0 auto;max-width:720px;height:calc(100dvh - 64px - env(safe-area-inset-top));display:flex;flex-direction:column;border-radius:34px 34px 0 0;background:rgba(12,16,30,.78);-webkit-backdrop-filter:saturate(170%) blur(30px);backdrop-filter:saturate(170%) blur(30px);border:1px solid var(--stroke);border-bottom:0;box-shadow:0 1px 0 rgba(255,255,255,.25) inset,0 -20px 50px rgba(0,0,0,.45);transition:transform .38s cubic-bezier(.2,.9,.25,1);will-change:transform;touch-action:pan-x}
@@ -350,8 +354,8 @@ body.home header{background:linear-gradient(180deg,rgba(2,4,10,.55),rgba(2,4,10,
 <div class="dock" id="dock"><nav class="tabs" id="tabs"></nav><button class="dock-search" id="dockSearch" aria-label="Add a flight"><svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><circle cx="10.5" cy="10.5" r="6.5"/><path d="m20 20-4.6-4.6"/></svg></button></div>
 <input type="file" id="icsFile" accept=".ics,text/calendar" hidden>
 <input type="file" id="backupFile" accept=".json,application/json" hidden>
-<script src="airports.js?v=18"></script>
+<script src="airports.js?v=19"></script>
 <script src="https://unpkg.com/maplibre-gl@5/dist/maplibre-gl.js" defer></script>
-<script src="app.js?v=18"></script>
+<script src="app.js?v=19"></script>
 </body>
 </html>
