@@ -64,7 +64,7 @@ const fmtDate = (ts, tz, o = { weekday: 'short', month: 'short', day: 'numeric' 
 const localDate = (ts, tz) => new Intl.DateTimeFormat('en-CA', { timeZone: safeTz(tz), year: 'numeric', month: '2-digit', day: '2-digit' }).format(ts);
 const localHM = (ts, tz) => new Intl.DateTimeFormat('en-GB', { timeZone: safeTz(tz), hour: '2-digit', minute: '2-digit', hourCycle: 'h23' }).format(ts);
 function dur(ms) {
-  ms = Math.abs(ms); const d = Math.floor(ms / 864e5), h = Math.floor(ms % 864e5 / H), m = Math.round(ms % H / M);
+  const tm = Math.round(Math.abs(ms) / M), d = Math.floor(tm / 1440), h = Math.floor(tm % 1440 / 60), m = tm % 60;
   return d ? `${d}d ${h}h` : h ? `${h}h ${m}m` : `${m}m`;
 }
 const rad = x => x * Math.PI / 180, deg = x => x * 180 / Math.PI;
@@ -288,7 +288,9 @@ function viewSettings() {
       ${st.apiKey ? '' : `<ol class="small muted steps"><li>Open <a href="https://rapidapi.com/aedbx-aedbx/api/aerodatabox/pricing" target="_blank" rel="noopener">AeroDataBox on RapidAPI</a> and sign up (free).</li><li>Choose the <b>Basic</b> plan ($0) and tap <b>Subscribe</b>.</li><li>Open the <b>Endpoints</b> tab and copy the <b>X-RapidAPI-Key</b> value.</li><li>Paste it below.</li></ol>`}
       <label class="f"><span>API key</span><input id="setKey" value="${esc(st.apiKey)}" placeholder="Paste your X-RapidAPI-Key" autocomplete="off" autocapitalize="none" spellcheck="false"></label>
       <button class="btn sm" data-act="test-key">Test it</button>
-      <p class="muted small" style="margin-bottom:0">Your key is saved to your account only, so it works on all your devices.</p></div>
+      <p class="muted small">Your key is saved to your account only, so it works on all your devices.</p>
+      <label class="f" style="margin-top:14px"><span>Live plane position server (OpenSky)</span><input id="setLive" value="${esc(st.liveProxy || '')}" placeholder="https://contrail-live.you.workers.dev" autocomplete="off" autocapitalize="none" spellcheck="false"></label>
+      <p class="muted small" style="margin:0">${liveProxy() ? '✓ The plane on the map follows the real aircraft while it’s in the air.' : 'Optional: shows the real aircraft position instead of an estimate.'}</p></div>
     <h2>Sync server</h2><div class="card">${syncServerHtml()}</div>
     <h2>Data</h2><div class="card"><div class="actions" style="margin:0"><button class="btn sm" data-act="backup">Download backup</button><button class="btn sm" data-act="restore">Restore backup</button><button class="btn sm danger" data-act="wipe">Delete all data</button></div></div>
     <p class="muted small" style="text-align:center">Contrail · free & open · your data stays on your device</p>`;
@@ -304,8 +306,31 @@ function sheet(html, onMount) {
   onMount && onMount(el);
   return el;
 }
-function closeSheet() { const s = $('#sheet'); if (s) { s._map && s._map.remove(); s.remove(); } document.body.style.overflow = ''; }
+function closeSheet() { const s = $('#sheet'); if (s) { s._liveTimer && clearInterval(s._liveTimer); s._map && s._map.remove(); s.remove(); } document.body.style.overflow = ''; }
 const sheetHd = title => `<div class="hd"><h3>${title}</h3><button class="icon-btn" data-act="close" aria-label="Close">✕</button></div>`;
+
+// ---------- Live plane position (OpenSky via proxy) ----------
+const LIVE_PROXY_DEFAULT = '';
+const liveProxy = () => (S.settings.liveProxy || LIVE_PROXY_DEFAULT).replace(/\/+$/, '');
+const AIRLINE_ICAO_REV = Object.fromEntries(Object.entries(AIRLINE_ICAO).map(([i, a]) => [a, i]));
+const icaoCallsign = num => { const c = num.slice(0, 2), ic = AIRLINE_ICAO_REV[c]; return ic ? ic + num.slice(2) : num; };
+const liveFresh = f => f.livePos && Date.now() - f.livePos.t < 4 * M;
+async function fetchLivePos(f) {
+  const px = liveProxy(), ph = phase(f);
+  if (!px || ph.key !== 'air' || f.from?.lat == null || f.to?.lat == null) return false;
+  if (f._liveBackoff && Date.now() < f._liveBackoff) return false;
+  const est = liveFresh(f) ? [f.livePos.lat, f.livePos.lon] : gcPoint(f.from, f.to, ph.p);
+  try {
+    const r = await fetch(`${px}/track?callsign=${encodeURIComponent(icaoCallsign(f.num))}&lat=${est[0].toFixed(3)}&lon=${est[1].toFixed(3)}`);
+    const j = await r.json();
+    if (j.found) { f.livePos = { lat: j.lat, lon: j.lon, alt: j.alt, speed: j.speed, track: j.track, ground: j.ground, t: Date.now() }; f._liveBackoff = 0; return true; }
+    f._liveBackoff = Date.now() + (r.status === 429 ? 30 : 5) * M;
+  } catch (e) { f._liveBackoff = Date.now() + 5 * M; }
+  return false;
+}
+const liveLine = f => { if (!liveFresh(f)) return ''; const p = f.livePos, km = S.settings.units === 'km';
+  const alt = p.alt != null ? `${Math.round(km ? p.alt : p.alt * 3.28084).toLocaleString()} ${km ? 'm' : 'ft'}` : '', spd = p.speed != null ? `${Math.round(p.speed * (km ? 3.6 : 2.23694))} ${km ? 'km/h' : 'mph'}` : '';
+  return ['● Live position', alt, spd].filter(Boolean).join(' · '); };
 
 // ---------- Globe maps (MapLibre + NASA night-lights imagery, no API key) ----------
 const NIGHT_TILES = 'https://gibs.earthdata.nasa.gov/wmts/epsg3857/best/VIIRS_CityLights_2012/default//GoogleMapsCompatible_Level8/{z}/{y}/{x}.jpg';
@@ -358,20 +383,25 @@ async function showRoutes(map, flights, focus, opts = {}) {
   flights.filter(f => f.from?.lat != null && f.to?.lat != null).forEach(f => {
     const line = gcLine(f.from, f.to, 96);
     if (focus && f.id === focus.id) {
-      const ph = phase(f), cut = Math.round(Math.max(0, Math.min(1, ph.p)) * (line.length - 1));
+      const ph = phase(f);
+      let cut = Math.round(Math.max(0, Math.min(1, ph.p)) * (line.length - 1));
+      if (ph.key === 'air' && liveFresh(f)) { let best = 1e9; line.forEach((pt, i) => { const d = (pt[0] - f.livePos.lat) ** 2 + (pt[1] - f.livePos.lon) ** 2; if (d < best) { best = d; cut = i; } }); }
       feats.push(lineFeat(line, 'main', f.id));
       if (cut > 0) feats.push(lineFeat(line.slice(0, cut + 1), 'done', f.id));
       if (ph.key === 'air') {
-        const p = line[cut], q = line[Math.min(cut + 1, line.length - 1)], el = document.createElement('div');
-        el.className = 'gplane'; el.innerHTML = planeSvg(bearing(p, q), 30);
-        map._markers.push(new (ML().Marker)({ element: el }).setLngLat([p[1], p[0]]).addTo(map));
+        const el = document.createElement('div'); el.className = 'gplane' + (liveFresh(f) ? ' live' : '');
+        let pos, rot;
+        if (liveFresh(f)) { pos = [f.livePos.lat, f.livePos.lon]; rot = f.livePos.track ?? 0; }
+        else { const p = line[cut], q = line[Math.min(cut + 1, line.length - 1)]; pos = p; rot = bearing(p, q); }
+        el.innerHTML = planeSvg(rot, 30);
+        map._markers.push(new (ML().Marker)({ element: el }).setLngLat([pos[1], pos[0]]).addTo(map));
       }
     } else feats.push(lineFeat(line, 'dim', f.id));
   });
   map.getSource('routes').setData({ type: 'FeatureCollection', features: feats });
   map._focus = focus;
   if (focus && focus.from?.lat != null && focus.to?.lat != null) {
-    map.jumpTo(routeCam(map, focus, opts.padTop || 0, opts.padBottom || 0));
+    if (!opts.keepCamera) map.jumpTo(routeCam(map, focus, opts.padTop || 0, opts.padBottom || 0));
     placePins(map, focus);
   } else if (opts.fitAll) {
     const pts = flights.flatMap(f => f.from?.lat != null && f.to?.lat != null ? [[f.from.lon, f.from.lat], [f.to.lon, f.to.lat]] : []);
@@ -399,7 +429,8 @@ function updateHomeGlobe() {
     const focus = up.find(f => f.from?.lat != null && f.to?.lat != null);
     homeGlobe._focus = focus?.id;
     requestAnimationFrame(() => { try { homeGlobe.resize(); } catch (e) {} });
-    const key = JSON.stringify([innerWidth, innerHeight, ...up.map(f => [f.id, f.from?.iata, f.to?.iata, Math.round(phase(f).p * 50)])]);
+    if (focus && phase(focus).key === 'air' && liveProxy() && !liveFresh(focus)) fetchLivePos(focus).then(ok => { if (ok) { save(false); homeGlobe._key = ''; updateHomeGlobe(); } });
+    const key = JSON.stringify([innerWidth, innerHeight, ...up.map(f => [f.id, f.from?.iata, f.to?.iata, Math.round(phase(f).p * 50), f.livePos?.t || 0])]);
     if (homeGlobe._key === key) return; homeGlobe._key = key;
     showRoutes(homeGlobe, focus ? up : live(S.flights), focus, { fitAll: true, padTop: 90, padBottom: innerHeight * 0.56 });
   } catch (e) { console.warn(e); }
@@ -497,7 +528,7 @@ function openFlight(id, src = 'flights') {
   el.innerHTML = `<div class="fmap" id="fmap"></div>
     <div class="dsheet"><div class="grabzone"><div class="grabber"></div>
     <div class="dhead">${badge(f.num.slice(0, 2), true)}<div class="sp"><div class="muted small caps">${esc(f.num)} · ${fmtDate(d, f.from?.tz)}${f.airline ? ' · ' + esc(f.airline) : ''}</div><h3>${cityOf(f.from)} to ${cityOf(f.to)}</h3>${friend ? `<div class="muted small">Shared by ${esc(f.sharedBy || 'a friend')}</div>` : ''}</div><button class="icon-btn" data-act="close" aria-label="Close">✕</button></div></div>
-    <div class="dscroll"><div class="statusbox ${ph.cls}"><b>${status}</b><span>${sub2}</span>${ph.key === 'air' ? `<div class="bar"><i style="width:${ph.p * 100}%"></i></div>` : ''}</div>
+    <div class="dscroll"><div class="statusbox ${ph.cls}"><b>${status}</b><span>${sub2}</span>${ph.key === 'air' && liveProxy() ? `<span class="liveln" id="liveLine">${liveLine(f) || 'Looking for live position…'}</span>` : ''}${ph.key === 'air' ? `<div class="bar"><i style="width:${ph.p * 100}%"></i></div>` : ''}</div>
     <div class="leg"><div class="lh"><i>↗</i> <b>${esc(f.from?.iata)}</b> · ${esc(f.from?.name || f.from?.city || '')}</div>
       <div class="lrow"><div><div class="bigt">${fmtTime(d, f.from?.tz)}</div><div class="muted small">${dl >= 5 ? `<s>${fmtTime(f.depSched, f.from?.tz)}</s> delayed` : 'Scheduled'} · ${fmtDate(d, f.from?.tz)}</div></div>${gate(f.terminalDep, f.gateDep, 'gateDep')}</div></div>
     <div class="legmid">⏱ ${dur(a - d)}${km ? ` · ${fmtDist(km)}` : ''}${overnight ? ' · ☾ Overnight' : ''}</div>
@@ -518,6 +549,11 @@ function openFlight(id, src = 'flights') {
   document.body.appendChild(el); document.body.style.overflow = 'hidden';
   attachDrag(el, vis => { el._vis = vis; const m = el._map; if (m && m._focus) { m.easeTo({ ...routeCam(m, f, 70, vis), duration: 420 }); setTimeout(() => m._focus && placePins(m, f), 440); } });
   setTimeout(() => drawFlightMap(el, f), 30);
+  if (liveProxy() && ph.key === 'air') {
+    const tick = async () => { if (!el.isConnected) return clearInterval(el._liveTimer);
+      if (await fetchLivePos(f)) { save(false); const ln = el.querySelector('#liveLine'); if (ln) ln.textContent = liveLine(f); if (el._map) showRoutes(el._map, [f], f, { keepCamera: true }); } };
+    el._liveTimer = setInterval(tick, 30000); setTimeout(tick, 600);
+  }
 }
 function attachDrag(view, onSnap) {
   const sh = view.querySelector('.dsheet'), sc = view.querySelector('.dscroll'), gz = view.querySelector('.grabzone');
@@ -1059,6 +1095,7 @@ function startSession(acc) {
   loadUser(); closeSheet(); tab = 'flights';
   document.body.classList.add('authed'); render(); scheduleReminders(); refreshAll();
   if (pendingShare) { const p = pendingShare; pendingShare = null; receiveShare(p); }
+  if (pendingCfg) { const c = pendingCfg; pendingCfg = null; setTimeout(() => applyCfgLink(c), 300); }
   if (acc.mode === 'cloud') pull();
 }
 async function signOut() {
@@ -1151,7 +1188,7 @@ async function pull() {
   if (!fb || !user) return;
   try {
     const doc = await fb.db.collection('users').doc(user.uid).get();
-    if (doc.exists) { const d = doc.data(); S.flights = mergeList(S.flights, d.flights); S.friends = mergeList(S.friends, d.friends); if (!S.settings.name && d.name) S.settings.name = d.name; if (!S.settings.apiKey && d.apiKey) S.settings.apiKey = d.apiKey; if (d.units) S.settings.units = d.units; }
+    if (doc.exists) { const d = doc.data(); S.flights = mergeList(S.flights, d.flights); S.friends = mergeList(S.friends, d.friends); if (!S.settings.name && d.name) S.settings.name = d.name; if (!S.settings.apiKey && d.apiKey) S.settings.apiKey = d.apiKey; if (!S.settings.liveProxy && d.liveProxy) S.settings.liveProxy = d.liveProxy; if (d.units) S.settings.units = d.units; }
     
     save(false); await push(); render();
   } catch (e) { console.error(e); toast('Sync failed: ' + (e.code || e.message)); }
@@ -1159,7 +1196,7 @@ async function pull() {
 const clean = o => JSON.parse(JSON.stringify(o));
 async function push() {
   if (!fb || !user) return;
-  try { await fb.db.collection('users').doc(user.uid).set(clean({ flights: S.flights, friends: S.friends, name: S.settings.name || '', apiKey: S.settings.apiKey || '', units: S.settings.units || 'mi', updatedAt: Date.now() })); }
+  try { await fb.db.collection('users').doc(user.uid).set(clean({ flights: S.flights, friends: S.friends, name: S.settings.name || '', apiKey: S.settings.apiKey || '', liveProxy: S.settings.liveProxy || '', units: S.settings.units || 'mi', updatedAt: Date.now() })); }
   catch (e) { console.error(e); }
 }
 function schedulePush() { if (!user) return; clearTimeout(pushTimer); pushTimer = setTimeout(push, 1200); }
@@ -1229,6 +1266,7 @@ document.addEventListener('click', async e => {
 document.addEventListener('change', e => {
   const st = S.settings;
   if (e.target.id === 'setName') { st.name = e.target.value.trim(); save(); }
+  if (e.target.id === 'setLive') { st.liveProxy = e.target.value.trim(); save(); toast(st.liveProxy ? 'Live position server saved' : 'Live position off'); }
   if (e.target.id === 'setUnits') { st.units = e.target.value; save(false); }
   if (e.target.id === 'setKey') { st.apiKey = e.target.value.trim(); save(); toast(st.apiKey ? 'Key saved — tap Test it' : 'Live data off'); }
   if (e.target.id === 'e_from' || e.target.id === 'e_to') { e.target.value = e.target.value.toUpperCase(); if (e.target.id === 'e_from' && window.__lookup) scheduleAutoLookup(); }
@@ -1262,7 +1300,17 @@ document.addEventListener('keydown', e => {
 });
 
 // ---------- Boot ----------
-function handleHash() { const m = location.hash.match(/^#share=([\w-]+)/); if (m) { history.replaceState(null, '', location.pathname + location.search); account ? receiveShare(m[1]) : (pendingShare = m[1], toast('Sign in to see the shared flight')); } }
+let pendingCfg = null;
+function applyCfgLink(c) {
+  if (c.key) S.settings.apiKey = c.key;
+  if (c.live) S.settings.liveProxy = c.live;
+  save(); render(); toast(c.key ? '✓ Live flight data is on' : '✓ Live plane position is on');
+  if (c.key) refreshAll(true);
+}
+function handleHash() {
+  const k = location.hash.match(/^#(key|live)=(.+)$/);
+  if (k) { history.replaceState(null, '', location.pathname + location.search); const c = { [k[1]]: decodeURIComponent(k[2]).trim() }; account ? applyCfgLink(c) : (pendingCfg = c, toast('Sign in to finish setup')); return; }
+  const m = location.hash.match(/^#share=([\w-]+)/); if (m) { history.replaceState(null, '', location.pathname + location.search); account ? receiveShare(m[1]) : (pendingShare = m[1], toast('Sign in to see the shared flight')); } }
 window.addEventListener('hashchange', handleHash);
 (async () => {
   const sess = localStorage.getItem(SESSION_KEY), local = sess && getUsers()[sess];
