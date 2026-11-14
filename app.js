@@ -230,34 +230,10 @@ function render() {
   $('#title').textContent = TITLES[tab];
   const av = $('#hdrAvatar'); av.textContent = initials(account.username); av.setAttribute('style', avatarStyle(account.username));
   const m = $('#main');
-  if (tab === 'flights') m.innerHTML = viewFlights();
+  if (tab === 'flights') { m.innerHTML = viewFlights(); drawHeroMap(); }
   else if (tab === 'friends') m.innerHTML = viewFriends();
   else if (tab === 'stats') { m.innerHTML = viewStats(); drawWorldMap(); }
   else m.innerHTML = viewSettings();
-}
-function viewFlights() {
-  const now = Date.now(), all = live(S.flights);
-  const up = all.filter(f => arrT(f) > now - 6 * H).sort((a, b) => depT(a) - depT(b));
-  const past = all.filter(f => arrT(f) <= now - 6 * H).sort((a, b) => depT(b) - depT(a));
-  const list = sub === 'upcoming' ? up : past;
-  let html = `<div class="quick"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" style="opacity:.6;flex:none"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg>
-      <input id="quickNum" placeholder="Flight number — LY8, ELY8, Delta 100…" autocomplete="off" autocapitalize="characters" enterkeyhint="go">
-      <button class="icon-btn" data-act="smart-paste" title="Paste from email or message" aria-label="Paste"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="8" y="3" width="8" height="4" rx="1"/><path d="M16 5h2a2 2 0 0 1 2 2v12a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V7a2 2 0 0 1 2-2h2"/></svg></button></div>
-    <div class="detect-slot" id="quickChip"></div>
-    <div class="seg"><button data-sub="upcoming" class="${sub === 'upcoming' ? 'on' : ''}">Upcoming (${up.length})</button><button data-sub="past" class="${sub === 'past' ? 'on' : ''}">Past (${past.length})</button></div>`;
-  if (!list.length) {
-    html += `<div class="empty"><svg viewBox="0 0 24 24" fill="currentColor"><path d="M21 16v-2l-8-5V3.5a1.5 1.5 0 0 0-3 0V9l-8 5v2l8-2.5V19l-2 1.5V22l3.5-1 3.5 1v-1.5L13 19v-5.5z"/></svg>
-      <p>${sub === 'upcoming' ? 'No upcoming flights.' : 'No past flights yet.'}</p>
-      <div class="actions" style="justify-content:center"><button class="btn pri" data-act="add">Add a flight</button><button class="btn" data-act="import-ics">Import from calendar</button></div></div>`;
-  } else {
-    let lastYear = null;
-    list.forEach(f => {
-      if (sub === 'past') { const y = fmtDate(depT(f), f.from?.tz, { year: 'numeric' }); if (y !== lastYear) { html += `<h2>${y}</h2>`; lastYear = y; } }
-      html += flightCard(f, { past: sub === 'past' });
-    });
-    if (sub === 'upcoming') html += `<div class="actions"><button class="btn sm" data-act="import-ics">📅 Import from calendar</button>${S.settings.apiKey ? '<button class="btn sm" data-act="refresh-all">↻ Refresh live data</button>' : ''}</div>`;
-  }
-  return html;
 }
 function viewFriends() {
   const now = Date.now(), fr = live(S.friends).sort((a, b) => {
@@ -291,25 +267,6 @@ function computeStats(year) {
   const top = o => Object.entries(o).sort((a, b) => b[1] - a[1]).slice(0, 5);
   return { fl, km, ms, airports, countries, airlines: top(airlines), routes: top(routes), aircraft: top(aircraft), longest };
 }
-let statYear = 'all';
-function viewStats() {
-  const years = [...new Set(live(S.flights).filter(f => depT(f) < Date.now()).map(f => fmtDate(depT(f), f.from?.tz, { year: 'numeric' })))].sort().reverse();
-  const s = computeStats(statYear);
-  const around = s.km / 40075;
-  const list = (arr, empty) => arr.length ? arr.map(([k, v]) => `<div class="list-row"><span>${esc(k)}</span><span class="muted">${v}</span></div>`).join('') : `<div class="muted small">${empty}</div>`;
-  return `<div class="seg">${['all', ...years].slice(0, 5).map(y => `<button data-year="${y}" class="${statYear === y ? 'on' : ''}">${y === 'all' ? 'All time' : y}</button>`).join('')}</div>
-    <div class="map big" id="worldMap"></div>
-    <div class="grid">
-      <div class="stat"><div class="v">${s.fl.length}</div><div class="l">Flights</div></div>
-      <div class="stat"><div class="v">${fmtDist(s.km)}</div><div class="l">Distance · ${around.toFixed(2)}× around Earth</div></div>
-      <div class="stat"><div class="v">${Math.round(s.ms / H).toLocaleString()}h</div><div class="l">Time in the air · ${(s.ms / 864e5).toFixed(1)} days</div></div>
-      <div class="stat"><div class="v">${s.airports.size}</div><div class="l">Airports · ${s.countries.size} countries</div></div>
-    </div>
-    ${s.longest ? `<div class="card" style="margin-top:12px"><div class="muted small">Longest flight</div><b>${esc(s.longest.f.from?.iata)} → ${esc(s.longest.f.to?.iata)}</b> · ${fmtDist(s.longest.d)} · ${esc(s.longest.f.num)}</div>` : ''}
-    <h2>Top airlines</h2><div class="card">${list(s.airlines, 'No flights yet')}</div>
-    <h2>Top routes</h2><div class="card">${list(s.routes, 'No flights yet')}</div>
-    <h2>Aircraft</h2><div class="card">${list(s.aircraft, 'Add aircraft type to your flights (or use live lookup) to see this.')}</div>`;
-}
 function viewSettings() {
   const st = S.settings;
   const acct = `<div style="display:flex;gap:14px;align-items:center"><div class="avatar lg" style="${avatarStyle(account.username)}">${esc(initials(account.username))}</div>
@@ -342,44 +299,20 @@ function sheet(html, onMount) {
 function closeSheet() { const s = $('#sheet'); if (s) { s._map && s._map.remove(); s.remove(); } document.body.style.overflow = ''; }
 const sheetHd = title => `<div class="hd"><h3>${title}</h3><button class="icon-btn" data-act="close" aria-label="Close">✕</button></div>`;
 
-function openFlight(id, src = 'flights') {
-  const f = S[src].find(x => x.id === id); if (!f) return;
-  const ph = phase(f), now = Date.now(), friend = src === 'friends';
-  const step = (label, ts, tz, done) => `<div class="${done ? 'done' : ''}"><b>${label}</b> <span class="muted">${ts ? fmtTime(ts, tz) + ' · ' + fmtDate(ts, tz) : ''}</span></div>`;
-  const d = depT(f), a = arrT(f);
-  const kv = (k, v) => `<div><div class="k">${k}</div><div class="v">${esc(v || '—')}</div></div>`;
-  sheet(`${sheetHd(`${esc(f.num)} <span class="muted small">${esc(f.airline || airlineOf(f.num))}</span>`)}
-    ${friend ? `<p class="muted small" style="margin-top:-6px">Shared by ${esc(f.sharedBy || 'a friend')}</p>` : ''}
-    <div class="map" id="fmap"></div>
-    ${flightCard(f, { friend })}
-    <div class="kv">
-      ${kv('Dep terminal', f.terminalDep)}${kv('Dep gate', f.gateDep)}${kv('Seat', f.seat)}
-      ${kv('Arr terminal', f.terminalArr)}${kv('Arr gate', f.gateArr)}${kv('Baggage', f.baggage)}
-      ${kv('Distance', fmtDist(distKm(f.from, f.to)))}${kv('Duration', dur(a - d))}${kv('Aircraft', f.aircraft)}
-    </div>
-    ${delayMin(f) ? `<p class="small" style="color:var(--warn)">Departure ${delayMin(f) > 0 ? 'delayed' : 'early'} by ${dur(delayMin(f) * M)} (scheduled ${fmtTime(f.depSched, f.from?.tz)})</p>` : ''}
-    <h2>Timeline</h2><div class="timeline">
-      ${step('Leave for the airport', d - 3 * H, f.from?.tz, now > d - 3 * H)}
-      ${step('Boarding', d - 40 * M, f.from?.tz, now > d - 40 * M)}
-      ${step(`Depart ${esc(f.from?.iata)}`, d, f.from?.tz, now > d)}
-      ${step(`Arrive ${esc(f.to?.iata)}`, a, f.to?.tz, now > a)}
-    </div>
-    ${f.conf ? `<p class="small">Confirmation: <b>${esc(f.conf)}</b></p>` : ''}
-    ${f.notes ? `<p class="small muted">${esc(f.notes)}</p>` : ''}
-    <div class="actions">
-      ${!friend ? `<button class="btn sm" data-act="share-one" data-id="${f.id}">Share</button><button class="btn sm" data-act="edit" data-id="${f.id}">Edit</button>` : `<button class="btn sm" data-act="copy-friend" data-id="${f.id}">I'm on this flight too</button>`}
-      <button class="btn sm" data-act="ics-one" data-id="${f.id}" data-src="${src}">Add to calendar</button>
-      ${S.settings.apiKey ? `<button class="btn sm" data-act="refresh-one" data-id="${f.id}" data-src="${src}">↻ Refresh</button>` : ''}
-      <button class="btn sm danger" data-act="delete" data-id="${f.id}" data-src="${src}">Delete</button>
-    </div>
-    <p class="muted small">${ph.key === 'air' ? 'Position is estimated along the great-circle route from live times.' : ''} ${f.updatedLive ? 'Live data updated ' + dur(now - f.updatedLive) + ' ago.' : ''}</p>`,
-  el => setTimeout(() => drawFlightMap(el, f), 30));
-}
 function drawFlightMap(el, f) {
   const box = el.querySelector('#fmap');
-  if (!window.L || !f.from?.lat || !f.to?.lat) { box.innerHTML = `<div class="empty small">${window.L ? 'Map unavailable for unknown airports' : 'Map loading…'}</div>`; if (!window.L) setTimeout(() => $('#sheet') === el && drawFlightMap(el, f), 800); return; }
-  const map = L.map(box, { zoomControl: false, attributionControl: true, worldCopyJump: true });
-  el._map = map;
+  if (!window.L || f.from?.lat == null || f.to?.lat == null) { if (!window.L) setTimeout(() => $('#sheet') === el && drawFlightMap(el, f), 800); else box.style.display = 'none'; return; }
+  el._map = routeMap(box, f);
+}
+let heroMap = null;
+function drawHeroMap() {
+  const box = $('#heroMap'); if (!box) return;
+  if (heroMap) { try { heroMap.remove(); } catch (e) {} heroMap = null; }
+  if (!window.L) { setTimeout(drawHeroMap, 800); return; }
+  const f = S.flights.find(x => x.id === box.dataset.hero); if (f) heroMap = routeMap(box, f, true);
+}
+function routeMap(box, f, still) {
+  const map = L.map(box, { zoomControl: false, attributionControl: true, worldCopyJump: true, dragging: !still, scrollWheelZoom: !still, touchZoom: !still, doubleClickZoom: !still, boxZoom: false, keyboard: false });
   L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png', { attribution: '© OpenStreetMap © CARTO', subdomains: 'abcd', maxZoom: 18 }).addTo(map);
   const line = gcLine(f.from, f.to);
   const ph = phase(f);
@@ -391,7 +324,8 @@ function drawFlightMap(el, f) {
     const p = line[cut], q = line[Math.min(cut + 1, line.length - 1)], b = bearing(p, q);
     L.marker(p, { icon: L.divIcon({ className: 'plane-ico', html: planeSvg(b, 26), iconSize: [26, 26], iconAnchor: [13, 13] }) }).addTo(map);
   }
-  map.fitBounds(L.latLngBounds(line), { padding: [30, 30] });
+  map.fitBounds(L.latLngBounds(line), { padding: [34, 34] });
+  return map;
 }
 let worldMap = null;
 function drawWorldMap() {
@@ -406,6 +340,236 @@ function drawWorldMap() {
   const seen = new Set();
   s.fl.forEach(f => [f.from, f.to].forEach(a => { if (a?.lat && !seen.has(a.iata)) { seen.add(a.iata); L.circleMarker([a.lat, a.lon], { radius: 3, color: '#e8edf7', weight: 1, fillOpacity: 1 }).addTo(map).bindTooltip(a.iata); } }));
   if (bounds.length) map.fitBounds(L.latLngBounds(bounds), { padding: [20, 20], maxZoom: 6 });
+}
+
+function viewFlights() {
+  const now = Date.now(), all = live(S.flights);
+  const up = all.filter(f => arrT(f) > now - 6 * H).sort((a, b) => depT(a) - depT(b));
+  const past = all.filter(f => arrT(f) <= now - 6 * H).sort((a, b) => depT(b) - depT(a));
+  const list = sub === 'upcoming' ? up : past;
+  const hero = up.find(f => f.from?.lat != null && f.to?.lat != null);
+  let html = hero ? `<div class="map hero" id="heroMap" data-hero="${esc(hero.id)}"></div>` : '';
+  html += `<button class="quick" data-act="add"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" style="opacity:.6;flex:none"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg><span class="sp muted">Add a flight — LY8, Delta 100…</span><span class="plus">+</span></button>`;
+  html += `<div class="seg"><button data-sub="upcoming" class="${sub === 'upcoming' ? 'on' : ''}">Upcoming${up.length ? ` · ${up.length}` : ''}</button><button data-sub="past" class="${sub === 'past' ? 'on' : ''}">Past${past.length ? ` · ${past.length}` : ''}</button></div>`;
+  if (!list.length) {
+    html += `<div class="empty"><p>${sub === 'upcoming' ? 'No upcoming flights yet.' : 'No past flights yet.'}</p>
+      <div class="actions" style="justify-content:center"><button class="btn pri" data-act="add">Add a flight</button><button class="btn" data-act="import-ics">Import from calendar</button></div></div>`;
+  } else if (sub === 'upcoming') {
+    html += `<div class="card list">${list.map(f => rowItem(f)).join('')}</div>`;
+    html += `<div class="actions"><button class="btn sm" data-act="import-ics">📅 Import from calendar</button>${S.settings.apiKey ? '<button class="btn sm" data-act="refresh-all">↻ Refresh live data</button>' : ''}</div>`;
+  } else html += pastList(past);
+  return html;
+}
+const dayDiff = f => { const a = localDate(arrT(f), f.to?.tz), d = localDate(depT(f), f.from?.tz); return Math.round((Date.parse(a) - Date.parse(d)) / 864e5); };
+const cityOf = a => esc(a?.city || a?.name || a?.iata || '???');
+function rowItem(f, past) {
+  const now = Date.now(), ph = phase(f), d = depT(f), a = arrT(f), plus = dayDiff(f);
+  let big, unit;
+  if (past) { big = fmtDate(d, f.from?.tz, { day: 'numeric' }); unit = fmtDate(d, f.from?.tz, { month: 'short' }); }
+  else if (ph.key === 'air') { big = '✈︎'; unit = 'In air'; }
+  else if (ph.key === 'landed') { big = '✓'; unit = 'Landed'; }
+  else if (ph.key === 'cancel') { big = '✕'; unit = 'Canceled'; }
+  else { const ms = d - now; if (ms >= 864e5) { big = Math.floor(ms / 864e5); unit = big === 1 ? 'Day' : 'Days'; } else if (ms >= H) { big = Math.floor(ms / H); unit = big === 1 ? 'Hour' : 'Hours'; } else { big = Math.max(1, Math.round(ms / M)); unit = 'Min'; } }
+  const dl = delayMin(f);
+  return `<div class="frow" data-open="${esc(f.id)}" data-src="flights">
+    <div class="cd ${ph.key === 'air' ? 'air' : ''}"><b>${big}</b><span>${unit}</span></div>
+    <div class="fr-main">
+      <div class="fr-top">${badge(f.num.slice(0, 2))}<span>${esc(f.num)}</span><span class="sp"></span><span>${past ? fmtDate(d, f.from?.tz, { year: 'numeric' }) : fmtDate(d, f.from?.tz)}</span></div>
+      <div class="fr-title">${cityOf(f.from)} <span class="muted">to</span> ${cityOf(f.to)}</div>
+      <div class="fr-times"><span><i>↗</i> <em>${esc(f.from?.iata)}</em> ${fmtTime(d, f.from?.tz)}</span><span><i>↘</i> <em>${esc(f.to?.iata)}</em> ${fmtTime(a, f.to?.tz)}${plus ? `<sup>${plus > 0 ? '+' : ''}${plus}</sup>` : ''}</span></div>
+      ${ph.key === 'air' ? `<div class="bar"><i style="width:${ph.p * 100}%"></i></div><div class="small" style="color:var(--acc)">Lands in ${dur(a - now)}</div>` : ''}
+      ${!past && dl >= 15 ? `<span class="pill warn" style="margin-top:6px">Delayed ${dur(dl * M)}</span>` : ''}
+    </div></div>`;
+}
+let pastSort = 'date';
+function pastList(past) {
+  const key = { date: f => -depT(f), from: f => f.from?.city || f.from?.iata || '', to: f => f.to?.city || f.to?.iata || '', airline: f => f.airline || airlineOf(f.num) || f.num };
+  const sorted = [...past].sort((a, b) => { const x = key[pastSort](a), y = key[pastSort](b); return x < y ? -1 : x > y ? 1 : depT(b) - depT(a); });
+  let html = `<div class="chips sort">${[['date', 'Date'], ['from', 'From'], ['to', 'To'], ['airline', 'Airline']].map(([k, l]) => `<button class="chipbtn ${pastSort === k ? 'on' : ''}" data-act="sort" data-k="${k}">${l}${pastSort === k && k === 'date' ? ' ↓' : ''}</button>`).join('')}</div>`;
+  if (pastSort === 'date') {
+    const groups = {}; sorted.forEach(f => (groups[fmtDate(depT(f), f.from?.tz, { year: 'numeric' })] ||= []).push(f));
+    Object.entries(groups).forEach(([y, fl]) => { html += `<div class="yearhd"><b>${y}</b><span>${fl.length} flight${fl.length > 1 ? 's' : ''}</span></div><div class="card list">${fl.map(f => rowItem(f, true)).join('')}</div>`; });
+  } else html += `<div class="card list">${sorted.map(f => rowItem(f, true)).join('')}</div>`;
+  return html;
+}
+
+let statYear = 'all';
+function viewStats() {
+  const years = [...new Set(live(S.flights).filter(f => depT(f) < Date.now()).map(f => fmtDate(depT(f), f.from?.tz, { year: 'numeric' })))].sort().reverse();
+  const s = computeStats(statYear);
+  const longHaul = s.fl.filter(f => arrT(f) - depT(f) >= 6 * H).length;
+  const delayed = s.fl.filter(f => delayMin(f) >= 5), lost = delayed.reduce((t, f) => t + delayMin(f), 0);
+  const days = Math.floor(s.ms / 864e5), hrs = Math.round(s.ms % 864e5 / H);
+  const label = statYear === 'all' ? 'All-time' : statYear;
+  const list = (arr, empty) => arr.length ? arr.map(([k, v]) => `<div class="list-row"><span>${esc(k)}</span><span class="muted">${v}</span></div>`).join('') : `<div class="muted small">${empty}</div>`;
+  let html = `<div class="chips years">${['all', ...years].map(y => `<button class="chipbtn ${statYear === y ? 'on' : ''}" data-year="${y}">${y === 'all' ? 'All-time' : y}</button>`).join('')}</div>`;
+  html += `<div class="pcard p1"><div class="ph">${esc(label)} travel record</div>
+    <div class="pgrid"><div><span>Flights</span><b>${s.fl.length}</b><em>${longHaul} long haul</em></div><div><span>Distance</span><b>${fmtDist(s.km)}</b><em>${(s.km / 40075).toFixed(1)}× around the world</em></div>
+    <div><span>Flight time</span><b>${days ? `${days}d ${hrs}h` : `${hrs}h`}</b></div><div class="two"><div><span>Airports</span><b>${s.airports.size}</b></div><div><span>Airlines</span><b>${new Set(s.fl.map(f => f.airline || airlineOf(f.num) || f.num.slice(0, 2))).size}</b></div></div></div></div>`;
+  if (lost > 0) html += `<div class="pcard p2"><b class="hugeN">${lost >= 60 ? Math.round(lost / 60) : lost}</b><div class="pt">${lost >= 60 ? 'hours' : 'minutes'} lost to delays</div><div class="ps">Delayed flights averaged ${dur(lost / delayed.length * M)} late</div></div>`;
+  if (s.aircraft[0]) html += `<div class="pcard p3"><div class="pt">Most flown aircraft</div><b class="bigN">${esc(s.aircraft[0][0])}</b><div class="ps">${s.aircraft[0][1]} flight${s.aircraft[0][1] > 1 ? 's' : ''}</div></div>`;
+  if (s.longest) html += `<div class="pcard p4"><div class="pt">Longest flight</div><b class="bigN">${esc(s.longest.f.from?.iata)} → ${esc(s.longest.f.to?.iata)}</b><div class="ps">${fmtDist(s.longest.d)} · ${esc(s.longest.f.num)}</div></div>`;
+  html += `<h2>Your routes</h2><div class="map big" id="worldMap"></div>
+    <h2>Top airlines</h2><div class="card">${list(s.airlines, 'No flights yet')}</div>
+    <h2>Top routes</h2><div class="card">${list(s.routes, 'No flights yet')}</div>`;
+  return html;
+}
+
+function openFlight(id, src = 'flights') {
+  const f = S[src].find(x => x.id === id); if (!f) return;
+  const ph = phase(f), now = Date.now(), friend = src === 'friends', d = depT(f), a = arrT(f), plus = dayDiff(f), dl = delayMin(f);
+  const status = ph.key === 'air' ? `Lands in ${dur(a - now)}` : ph.key === 'landed' ? `Landed ${fmtDate(a, f.to?.tz)}` : ph.key === 'cancel' ? 'Canceled' : `Departs in ${dur(d - now)}`;
+  const sub2 = dl >= 15 ? `Delayed ${dur(dl * M)}` : f.status && !/unknown/i.test(f.status) ? esc(f.status) : f.estArr ? 'Arrival time is estimated — tap it to set' : f.updatedLive ? 'On time' : 'Scheduled';
+  const km = distKm(f.from, f.to);
+  const overnight = plus > 0 || (+localHM(d, f.from?.tz).slice(0, 2) >= 21);
+  const gate = (term, g, which) => `<button class="gatechip" data-act="tile" data-field="${which}" data-id="${f.id}" data-src="${src}"><b>${esc(g || '—')}</b><span>${term ? 'Terminal ' + esc(term) : 'Gate'}</span></button>`;
+  const tile = (field, label, val, icon) => `<button class="tile" data-act="tile" data-field="${field}" data-id="${f.id}" data-src="${src}"><span class="ti">${icon}</span><b>${label}</b><span class="${val ? '' : 'muted'}">${esc(val || 'Tap to add')}</span></button>`;
+  sheet(`<div class="map dmap" id="fmap"></div>
+    <div class="dhead">${badge(f.num.slice(0, 2), true)}<div class="sp"><div class="muted small caps">${esc(f.num)} · ${fmtDate(d, f.from?.tz)}${f.airline ? ' · ' + esc(f.airline) : ''}</div><h3>${cityOf(f.from)} to ${cityOf(f.to)}</h3>${friend ? `<div class="muted small">Shared by ${esc(f.sharedBy || 'a friend')}</div>` : ''}</div><button class="icon-btn" data-act="close" aria-label="Close">✕</button></div>
+    <div class="statusbox ${ph.cls}"><b>${status}</b><span>${sub2}</span>${ph.key === 'air' ? `<div class="bar"><i style="width:${ph.p * 100}%"></i></div>` : ''}</div>
+    <div class="leg"><div class="lh"><i>↗</i> <b>${esc(f.from?.iata)}</b> · ${esc(f.from?.name || f.from?.city || '')}</div>
+      <div class="lrow"><div><div class="bigt">${fmtTime(d, f.from?.tz)}</div><div class="muted small">${dl >= 5 ? `<s>${fmtTime(f.depSched, f.from?.tz)}</s> delayed` : 'Scheduled'} · ${fmtDate(d, f.from?.tz)}</div></div>${gate(f.terminalDep, f.gateDep, 'gateDep')}</div></div>
+    <div class="legmid">⏱ ${dur(a - d)}${km ? ` · ${fmtDist(km)}` : ''}${overnight ? ' · ☾ Overnight' : ''}</div>
+    <div class="leg"><div class="lh"><i>↘</i> <b>${esc(f.to?.iata)}</b> · ${esc(f.to?.name || f.to?.city || '')}</div>
+      <div class="lrow"><button class="plain" data-act="tile" data-field="arrTime" data-id="${f.id}" data-src="${src}"><div class="bigt">${fmtTime(a, f.to?.tz)}${plus ? `<sup>${plus > 0 ? '+' : ''}${plus}</sup>` : ''}</div><div class="muted small">${f.estArr ? 'Estimated · tap to set' : 'Scheduled'} · ${fmtDate(a, f.to?.tz)}</div></button>${gate(f.terminalArr, f.gateArr, 'gateArr')}</div></div>
+    <div class="tiles">
+      ${tile('conf', 'Booking code', f.conf, '🎫')}${tile('seat', 'Seat', f.seat, '💺')}
+      ${tile('baggage', 'Baggage belt', f.baggage, '🧳')}${tile('aircraft', 'Aircraft', f.aircraft, '✈︎')}
+    </div>
+    ${tile('notes', 'Notes', f.notes, '📝').replace('class="tile"', 'class="tile wide"')}
+    <div class="actions">
+      ${!friend ? `<button class="btn pri sm" data-act="share-one" data-id="${f.id}">Share</button>` : `<button class="btn sm" data-act="copy-friend" data-id="${f.id}">I'm on this flight too</button>`}
+      <button class="btn sm" data-act="ics-one" data-id="${f.id}" data-src="${src}">Add to calendar</button>
+      ${!friend ? `<button class="btn sm" data-act="edit" data-id="${f.id}">Edit route & times</button>` : ''}
+      ${S.settings.apiKey ? `<button class="btn sm" data-act="refresh-one" data-id="${f.id}" data-src="${src}">↻ Refresh</button>` : ''}
+      <button class="btn sm danger" data-act="delete" data-id="${f.id}" data-src="${src}">Delete</button>
+    </div>`, el => setTimeout(() => drawFlightMap(el, f), 30));
+}
+const TILE_LABELS = { conf: 'Booking code', seat: 'Seat', baggage: 'Baggage belt', aircraft: 'Aircraft', notes: 'Notes', gateDep: 'Departure gate', gateArr: 'Arrival gate', arrTime: 'Arrival time' };
+function editTile(id, src, field) {
+  const f = S[src].find(x => x.id === id); if (!f) return;
+  let body;
+  if (field === 'arrTime') body = `<label class="f"><span>Arrival time at ${esc(f.to?.iata)} (local)</span><input id="t_v" type="time" value="${localHM(arrT(f), f.to?.tz)}"></label>`;
+  else if (field === 'gateDep' || field === 'gateArr') { const t = field === 'gateDep' ? 'terminalDep' : 'terminalArr'; body = `<div class="row"><label class="f"><span>Terminal</span><input id="t_t" value="${esc(f[t] || '')}" autocapitalize="characters"></label><label class="f"><span>Gate</span><input id="t_v" value="${esc(f[field] || '')}" autocapitalize="characters"></label></div>`; }
+  else if (field === 'notes') body = `<textarea id="t_v" rows="4">${esc(f.notes || '')}</textarea>`;
+  else body = `<input id="t_v" value="${esc(f[field] || '')}" ${field === 'conf' || field === 'seat' ? 'autocapitalize="characters"' : ''} placeholder="${field === 'seat' ? 'e.g. 23A' : field === 'conf' ? 'e.g. ABC123' : ''}">`;
+  sheet(`${sheetHd(TILE_LABELS[field])}${body}<button class="btn pri block" style="margin-top:14px" data-act="tile-save" data-field="${field}" data-id="${id}" data-src="${src}">Save</button>`, el => setTimeout(() => el.querySelector('#t_t,#t_v')?.focus(), 250));
+}
+function saveTile(id, src, field) {
+  const f = S[src].find(x => x.id === id), v = ($('#t_v')?.value || '').trim();
+  if (field === 'arrTime') {
+    if (v) { let t = zonedToUtc(localDate(depT(f), f.from?.tz), v, f.to?.tz); while (t <= f.depSched) t += 864e5; f.arrSched = t; f.estArr = false; delete f.arrEst; }
+  } else {
+    f[field] = ['conf', 'seat'].includes(field) ? v.toUpperCase() : v;
+    if (field === 'gateDep') f.terminalDep = ($('#t_t')?.value || '').trim();
+    if (field === 'gateArr') f.terminalArr = ($('#t_t')?.value || '').trim();
+  }
+  f.updatedAt = Date.now(); save(); render(); openFlight(id, src);
+}
+
+// ---------- Add flight (search first) ----------
+const IATA2ICAO = Object.fromEntries(Object.entries(AIRLINE_ICAO).map(([i, a]) => [a, i]));
+const tzGuess = lon => { const o = Math.round((lon || 0) / 15); return o === 0 ? 'Etc/GMT' : `Etc/GMT${o > 0 ? '-' : '+'}${Math.abs(o)}`; };
+function apFromRoute(a) {
+  if (!a) return null; const k = AP[a.iata_code];
+  return k ? { ...k } : { iata: a.iata_code || a.icao_code, name: a.name || '', city: a.municipality || '', cc: a.country_iso_name || '', lat: a.latitude, lon: a.longitude, tz: tzGuess(a.longitude) };
+}
+const routeCache = {};
+async function freeRoute(num) {
+  if (num in routeCache) return routeCache[num];
+  const code = num.slice(0, 2), n = num.slice(2);
+  const tries = [...(IATA2ICAO[code] ? [IATA2ICAO[code] + n] : []), num];
+  const one = async cs => {
+    const ctl = new AbortController(); const to = setTimeout(() => ctl.abort(), 6000);
+    try {
+      const r = await fetch(`https://api.adsbdb.com/v0/callsign/${encodeURIComponent(cs)}`, { signal: ctl.signal });
+      if (!r.ok) return null;
+      const fr = (await r.json())?.response?.flightroute;
+      return fr?.origin && fr?.destination ? { from: apFromRoute(fr.origin), to: apFromRoute(fr.destination), airline: fr.airline?.name || '' } : null;
+    } catch (e) { return null; } finally { clearTimeout(to); }
+  };
+  const res = await Promise.all(tries.map(one));
+  return routeCache[num] = res.find(Boolean) || null;
+}
+const estDur = (a, b) => { const km = distKm(a, b); return km ? Math.round((km / 820 + .5) * 4) / 4 * H : 2 * H; };
+let AF = null, afTimer = null;
+function openAdd(pre = {}) {
+  const p0 = parseFlight(pre.num || '');
+  AF = { date: pre.date || localDate(Date.now(), DEVICE_TZ), pre, state: 'idle', key: '' };
+  sheet(`${sheetHd('Add flight')}
+    <div class="bigfield"><svg width="22" height="22" viewBox="0 0 24 24" fill="currentColor" style="opacity:.55"><path d="M21 16v-2l-8-5V3.5a1.5 1.5 0 0 0-3 0V9l-8 5v2l8-2.5V19l-2 1.5V22l3.5-1 3.5 1v-1.5L13 19v-5.5z"/></svg>
+      <input id="af_num" placeholder="Flight number" autocomplete="off" autocapitalize="characters" spellcheck="false" enterkeyhint="search" value="${esc(p0 && !p0.partial ? p0.num : pre.num || '')}"></div>
+    <div class="detect-slot" id="af_chip"></div>
+    <div class="chips" id="af_dates"></div>
+    <div id="af_body"></div>
+    <div class="links"><button class="link" data-act="smart-paste">📋 Paste from email</button><button class="link" data-act="import-ics">📅 From calendar</button></div>
+    ${airportOptions()}`, el => { const i = el.querySelector('#af_num'); if (!i.value) setTimeout(() => i.focus(), 300); });
+  afDates(); afUpdate();
+}
+function afDates() {
+  const t = localDate(Date.now(), DEVICE_TZ), tm = localDate(Date.now() + 864e5, DEVICE_TZ), other = AF.date !== t && AF.date !== tm;
+  const lbl = other ? fmtDate(zonedToUtc(AF.date, '12:00', DEVICE_TZ), DEVICE_TZ, { weekday: 'short', day: 'numeric', month: 'short' }) : 'Other date';
+  $('#af_dates').innerHTML = `<button class="chipbtn ${AF.date === t ? 'on' : ''}" data-act="af-date" data-d="${t}">Today</button><button class="chipbtn ${AF.date === tm ? 'on' : ''}" data-act="af-date" data-d="${tm}">Tomorrow</button><label class="chipbtn datechip ${other ? 'on' : ''}">📅 ${lbl}<input type="date" id="af_otherdate" value="${AF.date}"></label>`;
+}
+function afUpdate() {
+  if (!AF || !$('#af_num')) return;
+  const p = parseFlight($('#af_num').value); $('#af_chip').innerHTML = detectChip(p);
+  if (!p || p.partial) { clearTimeout(afTimer); AF.p = null; AF.state = 'idle'; AF.key = ''; return afBody(); }
+  AF.p = p; const key = p.num + '|' + AF.date;
+  if (AF.key === key) return;
+  clearTimeout(afTimer); AF.key = key; AF.state = 'searching'; afBody();
+  afTimer = setTimeout(() => afSearch(key), 450);
+}
+async function afSearch(key) {
+  const p = AF.p; let r = null;
+  if (S.settings.apiKey) { try { const res = await lookupFlight(p.num, AF.date); if (res?.length) r = { ...res[0], full: true, legs: res }; } catch (e) {} }
+  if (!r && AF.pre?.from && AF.pre?.to && (!AF.pre.num || parseFlight(AF.pre.num)?.num === p.num)) r = { from: getAirport(AF.pre.from), to: getAirport(AF.pre.to) };
+  if (!r) { const fr = await freeRoute(p.num); if (fr) r = fr; }
+  if (!AF || AF.key !== key) return;
+  AF.route = r; AF.state = r ? 'found' : 'manual'; afBody();
+}
+function afBody() {
+  const b = $('#af_body'); if (!b) return;
+  if (AF.state === 'idle') { b.innerHTML = `<p class="muted small hint">Type a flight number like <b>LY8</b>, <b>ELY8</b> or <b>Delta 100</b>. Contrail finds the airline and route for you.</p>`; return; }
+  if (AF.state === 'searching') { b.innerHTML = `<div class="card searching"><span class="spin"></span>Finding ${esc(AF.p.num)}…</div>`; return; }
+  const r = AF.route, pre = AF.pre || {};
+  if (AF.state === 'manual') {
+    b.innerHTML = `<div class="card"><p class="small muted" style="margin-top:0">Couldn’t find the route for <b>${esc(AF.p.num)}</b> automatically. Just add the airports:</p>
+      <div class="row"><label class="f"><span>From</span><input id="af_from" placeholder="Airport code" list="apList" maxlength="4" autocapitalize="characters" value="${esc(pre.from || '')}"></label><label class="f"><span>To</span><input id="af_to" placeholder="Airport code" list="apList" maxlength="4" autocapitalize="characters" value="${esc(pre.to || '')}"></label></div>
+      ${afTimes(null, null)}<button class="btn pri block" data-act="af-add">Add flight</button></div>`; return;
+  }
+  const km = distKm(r.from, r.to);
+  const legs = r.legs && r.legs.length > 1 ? `<div class="chips">${r.legs.map((l, i) => `<button class="chipbtn ${l.from.iata === r.from.iata ? 'on' : ''}" data-act="af-leg" data-i="${i}">${esc(l.from.iata)} → ${esc(l.to.iata)}</button>`).join('')}</div>` : '';
+  b.innerHTML = `${legs}<div class="card result">
+    <div class="fr-top">${badge(AF.p.iata)}<span><b style="color:var(--text)">${esc(AF.p.num)}</b> · ${esc(AF.p.airline || r.airline || '')}</span></div>
+    <div class="route"><div class="ap"><div class="code">${esc(r.from.iata)}</div><div class="city">${cityOf(r.from)}</div>${r.full ? `<div class="t">${fmtTime(r.depSched, r.from.tz)}</div>` : ''}</div>
+      <div class="mid">${planeSvg(90, 18)}<div>${r.full ? dur(r.arrSched - r.depSched) : km ? '≈ ' + dur(estDur(r.from, r.to)) : ''}</div><div>${km ? fmtDist(km) : ''}</div></div>
+      <div class="ap right"><div class="code">${esc(r.to.iata)}</div><div class="city" style="margin-left:auto">${cityOf(r.to)}</div>${r.full ? `<div class="t">${fmtTime(r.arrSched, r.to.tz)}</div>` : ''}</div></div>
+    ${r.full ? '' : afTimes(r.from, r.to)}
+    <button class="btn pri block" data-act="af-add" style="margin-top:12px">Add flight</button></div>`;
+}
+function afTimes(from, to) {
+  const pre = AF.pre || {};
+  return `<div class="row" style="margin-top:12px"><label class="f"><span>Departs${from ? ' ' + esc(from.iata) : ''} (local)</span><input id="af_dep" type="time" value="${esc(pre.dep || '')}"></label>
+    <label class="f"><span>Arrives (optional)</span><input id="af_arr" type="time" value="${esc(pre.arr || '')}"></label></div>
+    <p class="muted small" style="margin:-4px 4px 0">Leave arrival empty and Contrail estimates it. Seat and booking code go on the next screen.</p>`;
+}
+function afAdd() {
+  const p = AF.p, r = AF.route, pre = AF.pre || {};
+  if (!p) return toast('Enter the flight number');
+  let f;
+  if (r && r.full) { f = { ...r, id: uid(), source: 'api', updatedAt: Date.now() }; delete f.full; delete f.legs; }
+  else {
+    const from = r ? r.from : getAirport($('#af_from')?.value), to = r ? r.to : getAirport($('#af_to')?.value);
+    if (!from || !to) return toast('Add both airports');
+    const dep = $('#af_dep')?.value; if (!dep) { $('#af_dep').focus(); return toast('Add the departure time'); }
+    const depSched = zonedToUtc(AF.date, dep, from.tz), arr = $('#af_arr')?.value;
+    let arrSched; if (arr) { arrSched = zonedToUtc(AF.date, arr, to.tz); while (arrSched <= depSched) arrSched += 864e5; } else arrSched = depSched + estDur(from, to);
+    f = { id: uid(), num: p.num, airline: p.airline || r?.airline || '', from, to, depSched, arrSched, estArr: !arr, source: r ? 'route' : 'manual', updatedAt: Date.now() };
+  }
+  if (pre.seat) f.seat = pre.seat; if (pre.conf) f.conf = pre.conf;
+  S.flights.push(f); save(); AF = null; closeSheet(); tab = 'flights'; sub = arrT(f) > Date.now() - 6 * H ? 'upcoming' : 'past'; render(); openFlight(f.id);
+  toast(`Added ${f.num}`);
 }
 
 // ---------- Add / edit ----------
@@ -471,16 +635,16 @@ async function smartPaste() {
   const apply = t => {
     const x = extractFromText(t || '');
     if (!x.num && !x.from) return toast('Couldn’t find a flight in that text');
-    if (!$('#e_num')) openEditor(null, x); else { fillEditor(x); scheduleAutoLookup(); }
+    if (AF && $('#af_num')) { AF.pre = x; if (x.date) AF.date = x.date; if (x.num) $('#af_num').value = x.num; AF.key = ''; afDates(); afUpdate(); }
+    else openAdd(x);
     toast(x.num ? `Found ${x.num}${x.from && x.to ? ` · ${x.from} → ${x.to}` : ''}` : 'Found route details');
   };
   if (text && text.length > 3) return apply(text);
-  const wasEditor = !!$('#e_num');
-  const keep = wasEditor ? collectEditor() : null;
+  const keep = null;
   sheet(`${sheetHd('Paste flight details')}<p class="muted small" style="margin-top:-6px">Paste a confirmation email, text message or itinerary. Contrail picks out the flight number, airline, airports, date, times, seat and booking code.</p>
     <textarea id="pasteBox" rows="8" placeholder="e.g. Your El Al flight LY 8 from JFK to TLV departs Nov 20 at 6:00 PM…"></textarea>
     <button class="btn pri block" style="margin-top:12px" data-act="paste-go">Find my flight</button>`, el => el.querySelector('#pasteBox').focus());
-  window.__pasteApply = t => { closeSheet(); if (keep) { openEditor(null, keep); } apply(t); };
+  window.__pasteApply = t => { closeSheet(); AF = null; apply(t); };
 }
 function collectEditor() { const o = {}; ['num', 'date', 'from', 'to', 'dep', 'arr', 'arrDate', 'seat', 'conf'].forEach(k => { const v = ev(k); if (v) o[k] = v; }); return o; }
 const ev = k => ($('#e_' + k)?.value || '').trim();
@@ -870,16 +1034,23 @@ function schedulePush() { if (!user) return; clearTimeout(pushTimer); pushTimer 
 
 // ---------- Events ----------
 document.addEventListener('click', async e => {
-  const t = e.target.closest('[data-tab],[data-sub],[data-year],[data-act],[data-open],[data-auth]'); if (!t) return;
+  const t = e.target.closest('[data-tab],[data-sub],[data-year],[data-act],[data-open],[data-auth],[data-hero]'); if (!t) return;
   if (t.dataset.auth) { authMode = t.dataset.auth; renderAuth(); return; }
   if (t.dataset.tab) { tab = t.dataset.tab; render(); scrollTo(0, 0); return; }
   if (t.dataset.sub) { sub = t.dataset.sub; render(); return; }
   if (t.dataset.year) { statYear = t.dataset.year; render(); return; }
+  if (t.dataset.hero) { openFlight(t.dataset.hero); return; }
   if (t.dataset.open && t.dataset.open !== '' && !t.closest('.sheet')) { openFlight(t.dataset.open, t.dataset.src); return; }
   const id = t.dataset.id, src = t.dataset.src || 'flights';
   switch (t.dataset.act) {
     case 'close': closeSheet(); break;
-    case 'add': openEditor(); break;
+    case 'add': openAdd(); break;
+    case 'af-date': AF.date = t.dataset.d; afDates(); afUpdate(); break;
+    case 'af-add': afAdd(); break;
+    case 'af-leg': { const l = AF.route.legs[+t.dataset.i]; AF.route = { ...l, full: true, legs: AF.route.legs }; afBody(); break; }
+    case 'sort': pastSort = t.dataset.k; render(); break;
+    case 'tile': editTile(id, src, t.dataset.field); break;
+    case 'tile-save': saveTile(id, src, t.dataset.field); break;
     case 'edit': closeSheet(); openEditor(id); break;
     case 'save-flight': saveFromEditor(id); break;
     case 'lookup': doLookup(); break;
@@ -927,6 +1098,7 @@ document.addEventListener('change', e => {
   if (e.target.id === 'setKey') { st.apiKey = e.target.value.trim(); save(false); toast(st.apiKey ? 'Live data on' : 'Live data off'); }
   if (e.target.id === 'e_from' || e.target.id === 'e_to') { e.target.value = e.target.value.toUpperCase(); if (e.target.id === 'e_from' && window.__lookup) scheduleAutoLookup(); }
   if (e.target.id === 'e_date') scheduleAutoLookup();
+  if (e.target.id === 'af_otherdate' && e.target.value) { AF.date = e.target.value; afDates(); afUpdate(); }
 });
 $('#icsFile').addEventListener('change', async e => { const f = e.target.files[0]; if (f) importIcsText(await f.text()); e.target.value = ''; });
 $('#backupFile').addEventListener('change', async e => {
@@ -934,7 +1106,7 @@ $('#backupFile').addEventListener('change', async e => {
   try { const d = JSON.parse(await file.text()); S.flights = mergeList(S.flights, d.flights); S.friends = mergeList(S.friends, d.friends); save(); render(); toast('Restored'); }
   catch (err) { toast('Not a valid backup'); } e.target.value = '';
 });
-$('#hdrAction').addEventListener('click', () => openEditor());
+$('#hdrAction').addEventListener('click', () => openAdd());
 
 document.addEventListener('input', e => {
   const id = e.target.id;
@@ -943,9 +1115,11 @@ document.addEventListener('input', e => {
     if (v.length > 24 || /\n/.test(v)) { e.target.value = ''; $('#quickChip').innerHTML = ''; const x = extractFromText(v); if (x.num || x.from) { openEditor(null, x); toast(`Found ${x.num || ''} ${x.from && x.to ? x.from + ' → ' + x.to : ''}`); } return; }
     $('#quickChip').innerHTML = detectChip(parseFlight(v));
   }
+  if (id === 'af_num') afUpdate();
   if (id === 'e_num') { $('#editChip').innerHTML = detectChip(parseFlight(e.target.value)); scheduleAutoLookup(); }
 });
 document.addEventListener('keydown', e => {
+  if (e.target.id === 'af_num' && e.key === 'Enter') { e.preventDefault(); e.target.blur(); }
   if (e.target.id === 'quickNum' && e.key === 'Enter') {
     const p = parseFlight(e.target.value); if (!p) return toast('Type a flight number like LY8');
     openEditor(null, { num: p.partial ? p.iata : p.num });
