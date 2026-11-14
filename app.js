@@ -293,7 +293,7 @@ function viewSettings() {
       <p class="muted small" style="margin:0">${liveProxy() ? '✓ The plane on the map follows the real aircraft while it’s in the air.' : 'Optional: shows the real aircraft position instead of an estimate.'}</p></div>
     <h2>Sync server</h2><div class="card">${syncServerHtml()}</div>
     <h2>Data</h2><div class="card"><div class="actions" style="margin:0"><button class="btn sm" data-act="backup">Download backup</button><button class="btn sm" data-act="restore">Restore backup</button><button class="btn sm danger" data-act="wipe">Delete all data</button></div></div>
-    <p class="muted small" style="text-align:center">Contrail · version 9</p>`;
+    <p class="muted small" style="text-align:center">Contrail · version 10</p>`;
 }
 
 // ---------- Sheets ----------
@@ -654,23 +654,35 @@ function afUpdate() {
   afTimer = setTimeout(() => afSearch(key), 450);
 }
 async function afSearch(key) {
+  AF.movedFrom = null; AF.searching = null;
   const p = AF.p; let r = null;
   AF.live = null; AF.dates = null;
   if (S.settings.apiKey) {
     try { const res = await lookupFlight(p.num, AF.date); if (res?.length) r = { ...res[0], full: true, legs: res }; else AF.live = 'noflight'; }
     catch (e) { const c = +(e.message.match(/\((\d+)\)/) || [])[1]; AF.live = c === 401 || c === 403 ? 'rejected' : c === 429 ? 'quota' : 'error'; AF.liveMsg = e.message; }
-    if (AF.live === 'noflight') flightDates(p.num, AF.date).then(d => { if (AF && AF.key === key && d?.length) { AF.dates = d; afBody(); } });
+    if (AF.live === 'noflight') {
+      // Jump to the next day this flight actually operates
+      AF.searching = `Checking which days ${p.num} flies…`; afBody();
+      const asked = AF.date, d = await flightDates(p.num, asked);
+      if (!AF || AF.key !== key) return;
+      AF.dates = d;
+      const next = d?.find(x => x > asked);
+      if (next) {
+        try { const res = await lookupFlight(p.num, next); if (!AF || AF.key !== key) return;
+          if (res?.length) { r = { ...res[0], full: true, legs: res }; AF.movedFrom = asked; AF.date = next; AF.key = p.num + '|' + next; key = AF.key; afDates(); AF.live = 'moved'; } } catch (e) {}
+      }
+    }
   }
   if (!r && AF.pre?.from && AF.pre?.to && (!AF.pre.num || parseFlight(AF.pre.num)?.num === p.num)) r = { from: getAirport(AF.pre.from), to: getAirport(AF.pre.to) };
   if (!r) { const mine = live(S.flights).filter(f => f.num === p.num && f.from?.iata && f.to?.iata && f.source !== 'route' && f.routeSrc !== 'public').sort((a, b) => depT(b) - depT(a))[0]; if (mine) r = { from: mine.from, to: mine.to, src: 'history' }; }
-  if (!r) { const fr = await freeRoute(p.num); if (fr) r = { ...fr, src: 'public' }; }
+  if (!r && !(S.settings.apiKey && AF.live === 'noflight')) { const fr = await freeRoute(p.num); if (fr) r = { ...fr, src: 'public' }; }
   if (!AF || AF.key !== key) return;
   AF.route = r; AF.state = r ? 'found' : 'manual'; afBody();
 }
 function afBody() {
   const b = $('#af_body'); if (!b) return;
   if (AF.state === 'idle') { b.innerHTML = `<p class="muted small hint">Type a flight number like <b>LY8</b>, <b>ELY8</b> or <b>Delta 100</b>. Contrail finds the airline and route for you.</p>`; return; }
-  if (AF.state === 'searching') { b.innerHTML = `<div class="card searching"><span class="spin"></span>Finding ${esc(AF.p.num)}…</div>`; return; }
+  if (AF.state === 'searching') { b.innerHTML = `<div class="card searching"><span class="spin"></span>${esc(AF.searching || `Finding ${AF.p.num}…`)}</div>`; return; }
   const r = AF.route, pre = AF.pre || {};
   if (AF.state === 'manual') {
     b.innerHTML = `<div class="card">${liveNote()}<p class="small muted" style="margin-top:0">${AF.pre?.from ? 'Set the right airports' : `Couldn’t find the route for <b>${esc(AF.p.num)}</b> automatically. Just add the airports`}:</p>
@@ -684,7 +696,7 @@ function afBody() {
     <div class="route"><div class="ap"><div class="code">${esc(r.from.iata)}</div><div class="city">${cityOf(r.from)}</div>${r.full ? `<div class="t">${fmtTime(r.depSched, r.from.tz)}</div>` : ''}</div>
       <div class="mid">${planeSvg(90, 18)}<div>${r.full ? dur(r.arrSched - r.depSched) : km ? '≈ ' + dur(estDur(r.from, r.to)) : ''}</div><div>${km ? fmtDist(km) : ''}</div></div>
       <div class="ap right"><div class="code">${esc(r.to.iata)}</div><div class="city" style="margin-left:auto">${cityOf(r.to)}</div>${r.full ? `<div class="t">${fmtTime(r.arrSched, r.to.tz)}</div>` : ''}</div></div>
-    ${r.full ? `<div class="srcnote ok">✓ Live schedule${r.status ? ' · ' + esc(r.status) : ''}${r.gateDep ? ' · Gate ' + esc(r.gateDep) : ''}${r.terminalDep ? ' · Terminal ' + esc(r.terminalDep) : ''}</div>`
+    ${AF.live === 'moved' ? liveNote() : ''}${r.full ? `<div class="srcnote ok">✓ Live schedule${r.status ? ' · ' + esc(r.status) : ''}${r.gateDep ? ' · Gate ' + esc(r.gateDep) : ''}${r.terminalDep ? ' · Terminal ' + esc(r.terminalDep) : ''}</div>`
       : r.src === 'history' ? `<div class="srcnote">Route from your previous ${esc(AF.p.num)} flight · <button class="link inl" data-act="af-change">Change</button></div>`
       : `${liveNote()}<div class="srcnote warn">⚠︎ Route from a public database and may be outdated — check it. <button class="link inl" data-act="af-change">Change airports</button>${S.settings.apiKey ? '' : '<br>For exact times, gates and delays, <button class="link inl" data-act="goto-live">turn on live data</button> (free).'}</div>`}
     ${r.full ? '' : afTimes(r.from, r.to)}
@@ -694,6 +706,8 @@ function liveNote() {
   if (!AF.live) return '';
   const d = fmtDate(zonedToUtc(AF.date, '12:00', DEVICE_TZ), DEVICE_TZ);
   const chips = AF.dates?.length ? `<div class="chips" style="padding:8px 0 0">${AF.dates.slice(0, 6).map(x => `<button class="chipbtn" data-act="af-date" data-d="${x}">${fmtDate(zonedToUtc(x, '12:00', DEVICE_TZ), DEVICE_TZ)}</button>`).join('')}</div>` : '';
+  const others = (AF.dates || []).filter(x => x !== AF.date);
+  if (AF.live === 'moved') return `<div class="srcnote live">${esc(AF.p.num)} doesn’t fly on ${fmtDate(zonedToUtc(AF.movedFrom, '12:00', DEVICE_TZ), DEVICE_TZ)} — showing the next flight.${others.length ? `<div class="chips" style="padding:8px 0 0">${others.slice(0, 6).map(x => `<button class="chipbtn" data-act="af-date" data-d="${x}">${fmtDate(zonedToUtc(x, '12:00', DEVICE_TZ), DEVICE_TZ)}</button>`).join('')}</div>` : ''}</div>`;
   const msg = AF.live === 'noflight' ? `Live data has no <b>${esc(AF.p.num)}</b> on <b>${d}</b>.${AF.dates?.length ? ' It flies on:' : ' Try another date.'}`
     : AF.live === 'rejected' ? 'Your live-data key wasn’t accepted. Make sure you subscribed to AeroDataBox’s free <b>Basic</b> plan on RapidAPI, then <button class="link inl" data-act="goto-live">test the key</button>.'
     : AF.live === 'quota' ? 'You’ve used this month’s free live-data lookups.'
