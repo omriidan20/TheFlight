@@ -293,7 +293,7 @@ function viewSettings() {
       <p class="muted small" style="margin:0">${liveProxy() ? '✓ The plane on the map follows the real aircraft while it’s in the air.' : 'Optional: shows the real aircraft position instead of an estimate.'}</p></div>
     <h2>Sync server</h2><div class="card">${syncServerHtml()}</div>
     <h2>Data</h2><div class="card"><div class="actions" style="margin:0"><button class="btn sm" data-act="backup">Download backup</button><button class="btn sm" data-act="restore">Restore backup</button><button class="btn sm danger" data-act="wipe">Delete all data</button></div></div>
-    <p class="muted small" style="text-align:center">Contrail · free & open · your data stays on your device</p>`;
+    <p class="muted small" style="text-align:center">Contrail · version 9</p>`;
 }
 
 // ---------- Sheets ----------
@@ -1350,6 +1350,6 @@ window.addEventListener('hashchange', handleHash);
 setInterval(() => { if (account && !$('#sheet') && tab !== 'stats' && tab !== 'settings' && document.activeElement?.id !== 'quickNum') render(); }, 30e3);
 setInterval(() => refreshAll(), 10 * M);
 document.addEventListener('visibilitychange', () => { if (!document.hidden && account) { if (document.activeElement?.id !== 'quickNum') render(); refreshAll(); } });
-if ('serviceWorker' in navigator && location.protocol === 'https:') navigator.serviceWorker.register('sw.js').catch(() => {});
+if ('serviceWorker' in navigator && location.protocol === 'https:') navigator.serviceWorker.register('sw.js', { updateViaCache: 'none' }).then(r => r.update()).catch(() => {});
 window.__contrail = { S, parseIcs, detectFlight, importIcsText, zonedToUtc, shareUrl, receiveShare };
 })();
