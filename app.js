@@ -181,8 +181,8 @@ function extractFromText(text) {
 const depT = f => f.depEst || f.depSched;
 const arrT = f => f.arrEst || f.arrSched;
 function phase(f, now = Date.now()) {
-  if (f.status && /cancel/i.test(f.status)) return { key: 'cancel', label: 'Canceled', cls: 'bad', p: 0 };
-  if (f.status && /divert/i.test(f.status)) return { key: 'divert', label: 'Diverted', cls: 'bad', p: 0 };
+  if (f.status && /cancel/i.test(f.status)) return { key: 'cancel', label: /uncertain/i.test(f.status) ? 'Probably canceled' : 'Canceled', cls: 'bad', p: 0 };
+  if (f.diverted || (f.status && /divert/i.test(f.status))) return { key: 'divert', label: f.divertedTo?.iata ? `Diverted to ${f.divertedTo.iata}` : 'Diverted', cls: 'bad', p: now > arrT(f) ? 1 : Math.max(0, Math.min(1, (now - depT(f)) / (arrT(f) - depT(f)))) };
   const d = depT(f), a = arrT(f);
   if (now < d - 45 * M) return { key: 'sched', label: delayMin(f) >= 15 ? `Delayed ${dur(delayMin(f) * M)}` : 'On time', cls: delayMin(f) >= 15 ? 'warn' : 'ok', p: 0 };
   if (now < d) return { key: 'board', label: 'Boarding', cls: 'warn', p: 0 };
@@ -304,7 +304,7 @@ function viewSettings() {
       <p class="muted small" style="margin:0">${liveProxy() ? '✓ Using your OpenSky server.' : 'Leave empty unless live position doesn’t show up.'}</p></div>
     <h2>Sync server</h2><div class="card">${syncServerHtml()}</div>
     <h2>Data</h2><div class="card"><div class="actions" style="margin:0"><button class="btn sm" data-act="backup">Download backup</button><button class="btn sm" data-act="restore">Restore backup</button><button class="btn sm danger" data-act="wipe">Delete all data</button></div></div>
-    <p class="muted small" style="text-align:center">Contrail · version 22</p>`;
+    <p class="muted small" style="text-align:center">Contrail · version 23</p>`;
 }
 
 // ---------- Sheets ----------
@@ -507,7 +507,9 @@ async function showRoutes(map, flights, focus, opts = {}) {
   const feats = [];
   flights.filter(f => f.from?.lat != null && f.to?.lat != null).forEach(f => {
     const line = gcLine(f.from, f.to, 96);
-    if (focus && f.id === focus.id) {
+    if (focus && f.id === focus.id && f.diverted && f.divertedTo?.lat != null && phase(f).key !== 'air') {
+      feats.push(lineFeat(line, 'dim', f.id), lineFeat(gcLine(f.from, f.divertedTo, 64), 'done', f.id));
+    } else if (focus && f.id === focus.id) {
       const ph = phase(f);
       if (ph.key === 'air') {
         // Split the route at the plane: flown part = origin → plane, remaining = plane → destination,
@@ -528,6 +530,7 @@ async function showRoutes(map, flights, focus, opts = {}) {
   map.getSource('routes').setData({ type: 'FeatureCollection', features: feats });
   map._focus = focus;
   if (focus && focus.from?.lat != null && focus.to?.lat != null) {
+    if (focus.diverted && focus.divertedTo?.lat != null && phase(focus).key !== 'air') focus = { ...focus, to: focus.divertedTo };
     if (!opts.keepCamera) map[opts.ease ? 'easeTo' : 'jumpTo'](opts.follow && phase(focus).key === 'air' ? planeCam(map, focus, opts.padTop || 0, opts.padBottom || 0) : routeCam(map, focus, opts.padTop || 0, opts.padBottom || 0));
     placePins(map, focus);
   } else if (opts.airports) {
@@ -628,7 +631,7 @@ function rowItem(f, past) {
       <div class="fr-title">${cityOf(f.from)} <span class="muted">to</span> ${cityOf(f.to)}</div>
       <div class="fr-times"><span><i>↗</i> <em>${esc(f.from?.iata)}</em> <b class="${dcls(depDelay(f))}">${fmtTime(d, f.from?.tz)}</b></span><span><i>↘</i> <em>${esc(f.to?.iata)}</em> <b class="${dcls(arrDelay(f))}">${fmtTime(a, f.to?.tz)}</b>${plus ? `<sup>${plus > 0 ? '+' : ''}${plus}</sup>` : ''}</span></div>
       ${ph.key === 'air' ? `<div class="bar"><i style="width:${ph.p * 100}%"></i></div><div class="small" style="color:var(--acc)">Lands in ${dur(a - now)}</div>` : ''}
-      ${!past && dl >= 15 ? `<span class="pill warn" style="margin-top:6px">Delayed ${dur(dl * M)}</span>` : ''}
+      ${ph.key === 'divert' || ph.key === 'cancel' ? `<span class="pill bad" style="margin-top:6px">${esc(ph.label)}</span>` : !past && dl >= 15 ? `<span class="pill warn" style="margin-top:6px">Delayed ${dur(dl * M)}</span>` : ''}
     </div></div>`;
 }
 let pastSort = 'date';
@@ -682,8 +685,10 @@ function viewStats() {
 function openFlight(id, src = 'flights') {
   const f = S[src].find(x => x.id === id); if (!f) return;
   const ph = phase(f), now = Date.now(), friend = src === 'friends', d = depT(f), a = arrT(f), plus = dayDiff(f), dl = delayMin(f);
-  const status = ph.key === 'air' ? `Lands in ${dur(a - now)}` : ph.key === 'landed' ? `Landed ${fmtDate(a, f.to?.tz)}` : ph.key === 'cancel' ? 'Canceled' : `Departs in ${dur(d - now)}`;
-  const sub2 = ph.key === 'landed' ? (dl >= 15 ? `Arrived ${dur(dl * M)} late` : 'Completed') : dl >= 15 ? `Delayed ${dur(dl * M)}` : f.status && !/unknown/i.test(f.status) ? esc(f.status) : f.estArr ? 'Arrival time is estimated — tap it to set' : f.updatedLive ? 'On time' : 'Scheduled';
+  const confirmed = f.arrActual || /arrived|landed/i.test(f.status || '');
+  const status = ph.key === 'divert' ? (f.divertedTo?.iata ? `Diverted to ${cityOf(f.divertedTo)} (${esc(f.divertedTo.iata)})` : 'Diverted') : ph.key === 'cancel' ? ph.label
+    : ph.key === 'air' ? `Lands in ${dur(a - now)}` : ph.key === 'landed' ? (confirmed ? `Landed ${fmtDate(a, f.to?.tz)}` : `Due to land ${fmtDate(a, f.to?.tz)}`) : `Departs in ${dur(d - now)}`;
+  const sub2 = ph.key === 'divert' ? `Did not arrive at ${esc(f.to?.iata || '')}` : ph.key === 'cancel' ? 'This flight did not operate' : ph.key === 'landed' ? (!confirmed ? 'Not confirmed by live data' : dl >= 15 ? `Arrived ${dur(dl * M)} late` : 'Completed') : dl >= 15 ? `Delayed ${dur(dl * M)}` : f.status && !/unknown/i.test(f.status) ? esc(f.status) : f.estArr ? 'Arrival time is estimated — tap it to set' : f.updatedLive ? 'On time' : 'Scheduled';
   const km = distKm(f.from, f.to);
   const overnight = plus > 0 || (+localHM(d, f.from?.tz).slice(0, 2) >= 21);
   const gate = (term, g, which) => `<button class="gatechip" data-act="tile" data-field="${which}" data-id="${f.id}" data-src="${src}"><b>${esc(g || '—')}</b><span>${term ? 'Terminal ' + esc(term) : 'Gate'}</span></button>`;
@@ -698,12 +703,13 @@ function openFlight(id, src = 'flights') {
       <div class="lrow"><div><div class="bigt ${dcls(depDelay(f))}">${fmtTime(d, f.from?.tz)}</div><div class="muted small">${depDelay(f) >= 5 || depDelay(f) <= -1 ? `<s>${fmtTime(f.depSched, f.from?.tz)}</s> <span class="${dcls(depDelay(f))}">${tlabel(depDelay(f), now > d, 'Left')}</span>` : now > d ? 'Departed' : f.updatedLive ? 'On time' : 'Scheduled'} · ${fmtDate(d, f.from?.tz)}</div></div>${gate(f.terminalDep, f.gateDep, 'gateDep')}</div></div>
     <div class="legmid">⏱ ${dur(a - d)}${km ? ` · ${fmtDist(km)}` : ''}${overnight ? ' · ☾ Overnight' : ''}</div>
     <div class="leg"><div class="lh"><i>↘</i> <b>${esc(f.to?.iata)}</b> · ${esc(f.to?.name || f.to?.city || '')}</div>
-      <div class="lrow"><button class="plain" data-act="tile" data-field="arrTime" data-id="${f.id}" data-src="${src}"><div class="bigt ${dcls(arrDelay(f))}">${fmtTime(a, f.to?.tz)}${plus ? `<sup>${plus > 0 ? '+' : ''}${plus}</sup>` : ''}</div><div class="muted small">${f.estArr ? 'Estimated · tap to set' : arrDelay(f) >= 5 || arrDelay(f) <= -1 ? `<s>${fmtTime(f.arrSched, f.to?.tz)}</s> <span class="${dcls(arrDelay(f))}">${tlabel(arrDelay(f), now > a, 'Landed')}</span>` : now > a ? 'Landed' : f.arrEst ? 'Estimated on time' : f.updatedLive ? 'On time' : 'Scheduled'} · ${fmtDate(a, f.to?.tz)}</div></button>${gate(f.terminalArr, f.gateArr, 'gateArr')}</div></div>
+      <div class="lrow"><button class="plain" data-act="tile" data-field="arrTime" data-id="${f.id}" data-src="${src}"><div class="bigt ${dcls(arrDelay(f))}">${fmtTime(a, f.to?.tz)}${plus ? `<sup>${plus > 0 ? '+' : ''}${plus}</sup>` : ''}</div><div class="muted small">${ph.key === 'divert' ? `<span class="late">Diverted${f.divertedTo?.iata ? ' to ' + esc(f.divertedTo.iata) : ''} — did not arrive here</span>` : ph.key === 'cancel' ? '<span class="late">Canceled</span>' : f.estArr ? 'Estimated · tap to set' : arrDelay(f) >= 5 || arrDelay(f) <= -1 ? `<s>${fmtTime(f.arrSched, f.to?.tz)}</s> <span class="${dcls(arrDelay(f))}">${tlabel(arrDelay(f), now > a, 'Landed')}</span>` : now > a ? 'Landed' : f.arrEst ? 'Estimated on time' : f.updatedLive ? 'On time' : 'Scheduled'} · ${fmtDate(a, f.to?.tz)}</div></button>${gate(f.terminalArr, f.gateArr, 'gateArr')}</div></div>
     <div class="tiles">
       ${tile('conf', 'Booking code', f.conf, '🎫')}${tile('seat', 'Seat', f.seat, '💺')}
       ${tile('baggage', 'Baggage belt', f.baggage, '🧳')}${tile('aircraft', 'Aircraft', f.aircraft, '✈︎')}
     </div>
     ${tile('notes', 'Notes', f.notes, '📝').replace('class="tile"', 'class="tile wide"')}
+    <div class="srcline">${f.updatedLive ? `Live data from AeroDataBox${f.status ? ` · status “${esc(f.status)}”` : ''} · checked ${dur(Date.now() - (f.lastCheck || f.updatedLive))} ago` : 'Times from the schedule — not confirmed by live data'}${S.settings.apiKey ? ` · <button class="link inl" data-act="refresh-one" data-id="${f.id}" data-src="${src}">Check again</button>` : ''}</div>
     <h2>Aircraft</h2><div class="card" id="acCard"></div>
     <h2>Delay history</h2><div class="card" id="dlCard"></div>
     <div class="actions">
@@ -717,6 +723,10 @@ function openFlight(id, src = 'flights') {
   attachDrag(el, vis => { el._vis = vis; const m = el._map; if (m && m._focus) { m.easeTo({ ...(phase(f).key === 'air' ? planeCam(m, f, 70, vis) : routeCam(m, f, 70, vis)), duration: 420 }); setTimeout(() => m._focus && placePins(m, f), 440); } });
   setTimeout(() => drawFlightMap(el, f), 30);
   fillFlightExtras(el, f);
+  if (S.settings.apiKey && !f.finalChecked && (f.finalTries || 0) < 3 && arrT(f) < Date.now() - H && arrT(f) > Date.now() - 30 * 864e5 && !el._checked) {
+    el._checked = true; f.finalTries = (f.finalTries || 0) + 1;
+    refreshFlight(f).then(ok => { save(); if (ok && el.isConnected) { render(); openFlight(id, src); } }).catch(() => {});
+  }
   if (ph.key === 'air') {
     const tick = async () => { if (!el.isConnected) return clearInterval(el._liveTimer);
       if (await fetchLivePos(f)) { save(false); const ln = el.querySelector('#liveLine'); if (ln) ln.textContent = liveLine(f); if (el._map) showRoutes(el._map, [f], f, { keepCamera: true }); } };
@@ -1057,11 +1067,13 @@ async function lookupFlight(num, date) {
   return list.map(x => {
     const dep = x.departure || {}, arr = x.arrival || {};
     const depSched = adbTime(dep.scheduledTime), arrSched = adbTime(arr.scheduledTime);
-    const depEst = adbTime(dep.runwayTime) || adbTime(dep.revisedTime) || adbTime(dep.predictedTime);
-    const arrEst = adbTime(arr.runwayTime) || adbTime(arr.revisedTime) || adbTime(arr.predictedTime);
+    const depAct = adbTime(dep.runwayTime) || adbTime(dep.actualTime), arrAct = adbTime(arr.runwayTime) || adbTime(arr.actualTime);
+    const depEst = depAct || adbTime(dep.revisedTime) || adbTime(dep.predictedTime);
+    const arrEst = arrAct || adbTime(arr.revisedTime) || adbTime(arr.predictedTime);
     return { num: normNum(x.number || num), airline: x.airline?.name || airlineOf(num), from: parseAdbAirport(dep), to: parseAdbAirport(arr),
       depSched, arrSched, depEst: depEst && depEst !== depSched ? depEst : null, arrEst: arrEst && arrEst !== arrSched ? arrEst : null,
       terminalDep: dep.terminal || '', gateDep: dep.gate || '', terminalArr: arr.terminal || '', gateArr: arr.gate || '', baggage: arr.baggageBelt || '',
+      depActual: !!depAct, arrActual: !!arrAct,
       aircraft: x.aircraft?.model || '', aircraftReg: x.aircraft?.reg || '', aircraftModeS: x.aircraft?.modeS || '', status: x.status || '', updatedLive: Date.now(),
       livePos: x.location?.lat != null ? { lat: x.location.lat, lon: x.location.lon, alt: x.location.altitude?.meter ?? null, speed: x.location.groundSpeed?.meterPerSecond ?? null, track: x.location.trueTrack?.deg ?? null, src: 'AeroDataBox', t: Math.min(Date.now(), Date.parse(String(x.location.reportedAtUtc || '').replace(' ', 'T').replace(/Z?$/, 'Z')) || Date.now()) } : undefined };
   }).filter(x => x.depSched && x.arrSched);
@@ -1090,10 +1102,18 @@ async function testKey(btn) {
 }
 async function refreshFlight(f) {
   const res = await lookupFlight(f.num, localDate(f.depSched, f.from?.tz));
-  if (!res) return false;
-  const m = res.find(r => r.from.iata === f.from?.iata) || res[0];
-  f.depEst = m.depEst; f.arrEst = m.arrEst;
-  ['terminalDep', 'gateDep', 'terminalArr', 'gateArr', 'baggage', 'aircraft', 'status', 'updatedLive', 'livePos', 'aircraftReg', 'aircraftModeS'].forEach(k => { if (m[k]) f[k] = m[k]; });
+  f.lastCheck = Date.now();
+  if (!res || !res.length) return false;
+  const fromI = f.from?.iata, toI = f.to?.iata;
+  const m = res.find(r => r.from.iata === fromI && r.to.iata === toI) || res.find(r => r.from.iata === fromI) || res[0];
+  // Diversion: the flight is marked Diverted, or the same flight number has a leg from the same origin to a different airport
+  const sideLeg = res.find(r => r !== m && r.from.iata === fromI && r.to.iata !== toI);
+  const contLeg = res.find(r => r !== m && r.to.iata === toI && r.from.iata !== fromI);
+  const isDiv = /divert/i.test(m.status || '') || (sideLeg && /divert|arrived|landed/i.test(sideLeg.status || '') && m.to.iata === toI && !m.arrActual);
+  f.diverted = !!isDiv; f.divertedTo = isDiv ? slimAp(m.to.iata !== toI ? m.to : sideLeg?.to || contLeg?.from || null) : null;
+  f.depEst = m.depEst; f.arrEst = m.arrEst; f.depActual = m.depActual; f.arrActual = m.arrActual; f.status = m.status || f.status;
+  ['terminalDep', 'gateDep', 'terminalArr', 'gateArr', 'baggage', 'aircraft', 'updatedLive', 'livePos', 'aircraftReg', 'aircraftModeS'].forEach(k => { if (m[k]) f[k] = m[k]; });
+  if (arrT(f) < Date.now() - H && (/arrived|landed|divert|cancel/i.test(f.status || '') || f.arrActual)) f.finalChecked = true;
   if (f.from && !f.from.lat) f.from = m.from; if (f.to && !f.to.lat) f.to = m.to;
   f.updatedAt = Date.now();
   return true;
@@ -1102,7 +1122,9 @@ async function refreshAll(force) {
   if (!S.settings.apiKey) return;
   const now = Date.now();
   const every = f => (now > depT(f) - 3 * H && now < arrT(f) + 30 * M) ? 15 * M : 6 * H;
-  const due = [...live(S.flights), ...live(S.friends)].filter(f => depT(f) - now < 36 * H && arrT(f) > now - 1 * H && (force || !f.updatedLive || now - f.updatedLive > every(f)));
+  const due = [...live(S.flights), ...live(S.friends)].filter(f => (depT(f) - now < 36 * H && arrT(f) > now - 1 * H && (force || !f.updatedLive || now - f.updatedLive > every(f)))
+    || (!f.finalChecked && (f.finalTries || 0) < 2 && arrT(f) < now - 1 * H && arrT(f) > now - 14 * 864e5 && (!f.lastCheck || now - f.lastCheck > 3 * H)));
+  due.forEach(f => { if (arrT(f) < now - H) f.finalTries = (f.finalTries || 0) + 1; });
   let n = 0;
   for (const f of due) { try { if (await refreshFlight(f)) n++; } catch (e) { console.warn(e); } }
   if (n) { save(); render(); }
