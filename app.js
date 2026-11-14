@@ -303,7 +303,7 @@ function viewSettings() {
       <p class="muted small" style="margin:0">${liveProxy() ? '✓ Using your OpenSky server.' : 'Leave empty unless live position doesn’t show up.'}</p></div>
     <h2>Sync server</h2><div class="card">${syncServerHtml()}</div>
     <h2>Data</h2><div class="card"><div class="actions" style="margin:0"><button class="btn sm" data-act="backup">Download backup</button><button class="btn sm" data-act="restore">Restore backup</button><button class="btn sm danger" data-act="wipe">Delete all data</button></div></div>
-    <p class="muted small" style="text-align:center">Contrail · version 19</p>`;
+    <p class="muted small" style="text-align:center">Contrail · version 20</p>`;
 }
 
 // ---------- Sheets ----------
@@ -1062,6 +1062,36 @@ function delayBlock(label, c) {
     <div class="dly-row"><div><span>Typical</span><b class="${dcls(med)}">${med <= 1 && med >= -1 ? 'On time' : med > 0 ? `${dur(med * M)} late` : `${dur(-med * M)} early`}</b></div><div><span>On time</span><b>${onTime}%</b></div><div><span>Worst 1 in 10</span><b class="${dcls(p90)}">${p90 > 0 ? `${dur(p90 * M)} late` : 'on time'}</b></div></div>
     <div class="dly-bars">${bars}</div></div>`;
 }
+// Common airliner types (ICAO designator → variant name, engines)
+const AC_TYPES = {
+  B737: ['Boeing 737-700', 2, 'CFM56-7B'], B738: ['Boeing 737-800', 2, 'CFM56-7B'], B739: ['Boeing 737-900/900ER', 2, 'CFM56-7B'],
+  B37M: ['Boeing 737 MAX 7', 2, 'CFM LEAP-1B'], B38M: ['Boeing 737 MAX 8', 2, 'CFM LEAP-1B'], B39M: ['Boeing 737 MAX 9', 2, 'CFM LEAP-1B'], B3XM: ['Boeing 737 MAX 10', 2, 'CFM LEAP-1B'],
+  B752: ['Boeing 757-200', 2, 'Rolls-Royce RB211-535 or Pratt & Whitney PW2000'], B753: ['Boeing 757-300', 2, 'Rolls-Royce RB211-535 or Pratt & Whitney PW2000'],
+  B763: ['Boeing 767-300', 2, 'GE CF6-80 or Pratt & Whitney PW4000'], B764: ['Boeing 767-400ER', 2, 'GE CF6-80'],
+  B772: ['Boeing 777-200/200ER', 2, 'GE90, PW4000 or Rolls-Royce Trent 800'], B77L: ['Boeing 777-200LR', 2, 'GE90-115B'], B77W: ['Boeing 777-300ER', 2, 'GE90-115B'],
+  B788: ['Boeing 787-8', 2, 'GEnx-1B or Rolls-Royce Trent 1000'], B789: ['Boeing 787-9', 2, 'GEnx-1B or Rolls-Royce Trent 1000'], B78X: ['Boeing 787-10', 2, 'GEnx-1B or Rolls-Royce Trent 1000'],
+  B744: ['Boeing 747-400', 4, 'GE CF6, PW4000 or RB211'], B748: ['Boeing 747-8', 4, 'GEnx-2B'],
+  A319: ['Airbus A319', 2, 'CFM56-5 or IAE V2500'], A320: ['Airbus A320', 2, 'CFM56-5 or IAE V2500'], A321: ['Airbus A321', 2, 'CFM56-5 or IAE V2500'],
+  A19N: ['Airbus A319neo', 2, 'CFM LEAP-1A or Pratt & Whitney GTF'], A20N: ['Airbus A320neo', 2, 'CFM LEAP-1A or Pratt & Whitney GTF'], A21N: ['Airbus A321neo', 2, 'CFM LEAP-1A or Pratt & Whitney GTF'],
+  A332: ['Airbus A330-200', 2, 'GE CF6-80E, PW4000 or Trent 700'], A333: ['Airbus A330-300', 2, 'GE CF6-80E, PW4000 or Trent 700'], A339: ['Airbus A330-900neo', 2, 'Rolls-Royce Trent 7000'],
+  A359: ['Airbus A350-900', 2, 'Rolls-Royce Trent XWB-84'], A35K: ['Airbus A350-1000', 2, 'Rolls-Royce Trent XWB-97'], A388: ['Airbus A380', 4, 'Rolls-Royce Trent 900 or Engine Alliance GP7200'],
+  BCS1: ['Airbus A220-100', 2, 'Pratt & Whitney PW1500G'], BCS3: ['Airbus A220-300', 2, 'Pratt & Whitney PW1500G'],
+  E170: ['Embraer 170', 2, 'GE CF34-8E'], E75L: ['Embraer 175', 2, 'GE CF34-8E'], E75S: ['Embraer 175', 2, 'GE CF34-8E'], E190: ['Embraer 190', 2, 'GE CF34-10E'], E195: ['Embraer 195', 2, 'GE CF34-10E'],
+  E290: ['Embraer 190-E2', 2, 'Pratt & Whitney PW1900G'], E295: ['Embraer 195-E2', 2, 'Pratt & Whitney PW1900G'],
+  CRJ7: ['Bombardier CRJ700', 2, 'GE CF34-8C'], CRJ9: ['Bombardier CRJ900', 2, 'GE CF34-8C'], CRJX: ['Bombardier CRJ1000', 2, 'GE CF34-8C'],
+  AT76: ['ATR 72-600', 2, 'Pratt & Whitney PW127 turboprops'], AT75: ['ATR 72-500', 2, 'Pratt & Whitney PW127 turboprops'], DH8D: ['De Havilland Dash 8-400', 2, 'Pratt & Whitney PW150A turboprops']
+};
+const AC_NAMES = [[/737 ?MAX ?7|737-7\b/i, 'B37M'], [/737 ?MAX ?8|737-8\b/i, 'B38M'], [/737 ?MAX ?9|737-9\b/i, 'B39M'], [/737 ?MAX ?10|737-10/i, 'B3XM'], [/737-7\d\d/i, 'B737'], [/737-8\d\d/i, 'B738'], [/737-9\d\d/i, 'B739'],
+  [/757-2/i, 'B752'], [/757-3/i, 'B753'], [/767-3/i, 'B763'], [/767-4/i, 'B764'], [/777-3/i, 'B77W'], [/777-2\d\dLR|777-200LR/i, 'B77L'], [/777-2/i, 'B772'], [/787-10/i, 'B78X'], [/787-9/i, 'B789'], [/787-8/i, 'B788'], [/747-8/i, 'B748'], [/747-4/i, 'B744'],
+  [/A?319 ?neo|A19N/i, 'A19N'], [/A?320 ?neo|A20N/i, 'A20N'], [/A?321 ?neo|A21N/i, 'A21N'], [/A319/i, 'A319'], [/A320/i, 'A320'], [/A321/i, 'A321'], [/A330-9|A330 ?neo/i, 'A339'], [/A330-2/i, 'A332'], [/A330-3/i, 'A333'],
+  [/A350-10/i, 'A35K'], [/A350/i, 'A359'], [/A380/i, 'A388'], [/A220-1|CS100/i, 'BCS1'], [/A220-3|CS300/i, 'BCS3'], [/E195-?E2/i, 'E295'], [/E190-?E2/i, 'E290'], [/E-?175|ERJ-?175/i, 'E75L'], [/E-?170/i, 'E170'], [/E-?190/i, 'E190'], [/E-?195/i, 'E195'],
+  [/CRJ-?900/i, 'CRJ9'], [/CRJ-?700/i, 'CRJ7'], [/CRJ-?1000/i, 'CRJX'], [/ATR ?72/i, 'AT76'], [/Dash 8|Q400|DHC-8-4/i, 'DH8D']];
+function acType(...hints) {
+  for (const h of hints) { const c = String(h || '').trim().toUpperCase(); if (AC_TYPES[c]) return { code: c, ...acFmt(AC_TYPES[c]) }; }
+  for (const h of hints) { if (!h) continue; const m = AC_NAMES.find(([re]) => re.test(h)); if (m) return { code: m[1], ...acFmt(AC_TYPES[m[1]]) }; }
+  return null;
+}
+const acFmt = ([name, n, eng]) => ({ name, n, eng });
 async function fillFlightExtras(el, f) {
   const ac = el.querySelector('#acCard'), dl = el.querySelector('#dlCard'); if (!ac || !dl) return;
   // Aircraft
@@ -1076,8 +1106,13 @@ async function fillFlightExtras(el, f) {
       else {
         const yr = d => d ? new Date(d).getFullYear() : '';
         const cell = (k, v) => v ? `<div><span>${k}</span><b>${esc(v)}</b></div>` : '';
-        ac.innerHTML = `<div class="ac-row"><div><span>Aircraft</span><b>${esc(a.typeName || a.model || f.aircraft || '')}</b></div><div><span>Registration</span><b>${esc(a.reg || reg)}</b></div></div>
-          <div class="ac-grid">${cell('Age', a.ageYears != null ? `${(+a.ageYears).toFixed(1)} years` : '')}${cell('Seats', a.numSeats)}${cell('Engines', [a.numEngines, a.engineType].filter(Boolean).join(' × '))}${cell('First flight', yr(a.firstFlightDate))}${cell('Delivered', yr(a.deliveryDate))}${cell('Airline', a.airlineName)}${cell('Type', a.productionLine || a.modelCode || '')}${a.isFreighter ? cell('Use', 'Freighter') : ''}</div>`;
+        const t = acType(f.aircraftType, a.icaoCode, a.icao, a.modelCode, a.model, f.aircraft, a.typeName);
+        const name = t?.name || a.typeName || a.model || f.aircraft || '';
+        const nEng = t?.n || a.numEngines, kind = /turboprop/i.test(t?.eng || '') || /prop/i.test(a.engineType || '') ? 'turboprop' : 'jet';
+        const engTxt = t ? `${nEng} × ${t.eng.replace(/ turboprops$/, '')}` : nEng ? `${nEng} ${kind} engines` : '';
+        ac.innerHTML = `<div class="ac-row"><div><span>Aircraft</span><b>${esc(name)}</b></div><div><span>Registration</span><b>${esc(a.reg || reg)}</b></div></div>
+          <div class="ac-grid">${cell('Age', a.ageYears != null ? `${(+a.ageYears).toFixed(1)} years` : '')}${cell('Seats', a.numSeats)}${cell('First flight', yr(a.firstFlightDate))}${cell('Delivered', yr(a.deliveryDate))}${cell('Type code', t?.code || '')}${a.isFreighter ? cell('Use', 'Freighter') : ''}</div>
+          ${engTxt ? `<div class="ac-eng"><span>Engines</span><b>${esc(engTxt)}</b><em>${nEng || ''} ${kind} engine${nEng > 1 ? 's' : ''}${t && / or |, /.test(t.eng) ? ' · type depends on the airline’s order' : ''}</em></div>` : ''}`;
         if (!f.aircraft && (a.typeName || a.model)) { f.aircraft = a.typeName || a.model; save(false); }
       }
     } catch (e) { if (el.isConnected) ac.innerHTML = base + `<div class="muted small">Couldn’t load aircraft details ${esc(e.message)}.</div>`; }
