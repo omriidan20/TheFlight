@@ -301,7 +301,7 @@ function viewSettings() {
       <p class="muted small" style="margin:0">${liveProxy() ? '✓ Using your OpenSky server.' : 'Leave empty unless live position doesn’t show up.'}</p></div>
     <h2>Sync server</h2><div class="card">${syncServerHtml()}</div>
     <h2>Data</h2><div class="card"><div class="actions" style="margin:0"><button class="btn sm" data-act="backup">Download backup</button><button class="btn sm" data-act="restore">Restore backup</button><button class="btn sm danger" data-act="wipe">Delete all data</button></div></div>
-    <p class="muted small" style="text-align:center">Contrail · version 14</p>`;
+    <p class="muted small" style="text-align:center">Contrail · version 15</p>`;
 }
 
 // ---------- Sheets ----------
@@ -314,7 +314,7 @@ function sheet(html, onMount) {
   onMount && onMount(el);
   return el;
 }
-function closeSheet() { const s = $('#sheet'); if (s) { s._liveTimer && clearInterval(s._liveTimer); s._map && s._map.remove(); s.remove(); } document.body.style.overflow = ''; }
+function closeSheet() { const s = $('#sheet'); if (s) { s._liveTimer && clearInterval(s._liveTimer); s._moveTimer && clearInterval(s._moveTimer); s._map && s._map.remove(); s.remove(); } document.body.style.overflow = ''; }
 const sheetHd = title => `<div class="hd"><h3>${title}</h3><button class="icon-btn" data-act="close" aria-label="Close">✕</button></div>`;
 
 // ---------- Live plane position (OpenSky via proxy) ----------
@@ -322,7 +322,20 @@ const LIVE_PROXY_DEFAULT = '';
 const liveProxy = () => (S.settings.liveProxy || LIVE_PROXY_DEFAULT).replace(/\/+$/, '');
 const AIRLINE_ICAO_REV = Object.fromEntries(Object.entries(AIRLINE_ICAO).map(([i, a]) => [a, i]));
 const icaoCallsign = num => { const c = num.slice(0, 2), ic = AIRLINE_ICAO_REV[c]; return ic ? ic + num.slice(2) : num; };
-const liveFresh = f => f.livePos && Date.now() - f.livePos.t < 4 * M;
+const liveFresh = f => f.livePos && Date.now() - f.livePos.t < 20 * M;
+function planePos(f) {
+  const ph = phase(f);
+  if (f.livePos && Date.now() - f.livePos.t < 20 * M) {
+    const p = f.livePos, age = (Date.now() - p.t) / 1000;
+    const remKm = distKm({ lat: p.lat, lon: p.lon }, f.to), spd = p.speed || (remKm * 1000 / Math.max(60, (arrT(f) - Date.now()) / 1000));
+    const adv = Math.min(1, (spd * age / 1000) / Math.max(remKm, 1));
+    const pt = adv > 0.002 ? gcPoint({ lat: p.lat, lon: p.lon }, f.to, adv) : [p.lat, p.lon];
+    const nxt = gcPoint({ lat: pt[0], lon: pt[1] }, f.to, 0.02);
+    return { lat: pt[0], lon: pt[1], hdg: adv > 0.002 || p.track == null ? bearing(pt, nxt) : p.track, live: true, age };
+  }
+  const pt = gcPoint(f.from, f.to, Math.max(0.001, Math.min(0.999, ph.p))), nxt = gcPoint(f.from, f.to, Math.min(1, ph.p + 0.01));
+  return { lat: pt[0], lon: pt[1], hdg: bearing(pt, nxt), live: false };
+}
 const LIVE_SOURCES = [
   { name: 'adsb.lol', url: cs => `https://api.adsb.lol/v2/callsign/${cs}` },
   { name: 'airplanes.live', url: cs => `https://api.airplanes.live/v2/callsign/${cs}` },
@@ -363,7 +376,8 @@ async function fetchLivePos(f) {
 }
 const liveLine = f => { if (!liveFresh(f)) return ''; const p = f.livePos, km = S.settings.units === 'km';
   const alt = p.alt != null ? `${Math.round(km ? p.alt : p.alt * 3.28084).toLocaleString()} ${km ? 'm' : 'ft'}` : '', spd = p.speed != null ? `${Math.round(p.speed * (km ? 3.6 : 2.23694))} ${km ? 'km/h' : 'mph'}` : '';
-  return ['● Live position', alt, spd, p.src ? 'via ' + p.src : ''].filter(Boolean).join(' · '); };
+  const ago = Math.round((Date.now() - p.t) / M);
+  return ['● Live position', alt, spd, p.src ? 'via ' + p.src : '', ago >= 1 ? `updated ${ago} min ago` : ''].filter(Boolean).join(' · '); };
 
 // ---------- Globe maps (MapLibre + NASA night-lights imagery, no API key) ----------
 const NIGHT_TILES = 'https://gibs.earthdata.nasa.gov/wmts/epsg3857/best/VIIRS_CityLights_2012/default//GoogleMapsCompatible_Level8/{z}/{y}/{x}.jpg';
@@ -405,6 +419,13 @@ function routeCam(map, f, padTop = 0, padBottom = 0) {
   const zoom = Math.max(0.9, Math.min(7, Math.log2(target * 40075 * Math.cos(rad(mid[0])) / (km * 512))));
   return { center: [mid[1], mid[0]], zoom, padding: { top: padTop, bottom: padBottom, left: 0, right: 0 } };
 }
+function planeCam(map, f, padTop = 0, padBottom = 0) {
+  const pp = planePos(f), near = Math.min(distKm(pp, f.from), distKm(pp, f.to));
+  const c = map.getContainer(), W = c.clientWidth || innerWidth, visH = Math.max(140, (c.clientHeight || innerHeight) - padTop - padBottom);
+  const spanKm = Math.max(500, Math.min(2200, near * 2.4));
+  const zoom = Math.max(2, Math.min(6.5, Math.log2(0.9 * Math.min(W, visH * 1.3) * 40075 * Math.cos(rad(pp.lat)) / (spanKm * 512))));
+  return { center: [pp.lon, pp.lat], zoom, padding: { top: padTop, bottom: padBottom, left: 0, right: 0 } };
+}
 function placePins(map, f) {
   map._pins?.forEach(m => m.remove());
   const pa = map.project([f.from.lon, f.from.lat]), pb = map.project([f.to.lon, f.to.lat]), fromLeft = pa.x <= pb.x;
@@ -421,10 +442,9 @@ async function showRoutes(map, flights, focus, opts = {}) {
       if (ph.key === 'air') {
         // Split the route at the plane: flown part = origin → plane, remaining = plane → destination,
         // so the plane always sits exactly on its path (live position or time-based estimate).
-        const isLive = liveFresh(f);
-        const pos = isLive ? [f.livePos.lat, f.livePos.lon] : gcPoint(f.from, f.to, Math.max(0.001, Math.min(0.999, ph.p)));
-        const P = { lat: pos[0], lon: pos[1] }, done = gcLine(f.from, P, 48), rest = gcLine(P, f.to, 72);
-        const hdg = isLive && f.livePos.track != null ? f.livePos.track : bearing(rest[0], rest[1] || rest[0]);
+        const pp = planePos(f), isLive = pp.live, pos = [pp.lat, pp.lon];
+        const P = { lat: pos[0], lon: pos[1] }, done = gcLine(f.from, P, 48), rest = gcLine(P, f.to, 72), hdg = pp.hdg;
+        map._plane = pos;
         feats.push(lineFeat(rest, 'main', f.id), lineFeat(done, 'done', f.id));
         const el = document.createElement('div'); el.className = 'gplane2' + (isLive ? ' live' : '');
         el.innerHTML = `<svg class="hdg" data-h="${hdg}" viewBox="0 0 48 48" style="transform:rotate(${hdg - map.getBearing()}deg)"><path d="M24 0 L30.5 9 L17.5 9 Z" fill="currentColor"/></svg>${logo(f.num.slice(0, 2))}`;
@@ -438,7 +458,7 @@ async function showRoutes(map, flights, focus, opts = {}) {
   map.getSource('routes').setData({ type: 'FeatureCollection', features: feats });
   map._focus = focus;
   if (focus && focus.from?.lat != null && focus.to?.lat != null) {
-    if (!opts.keepCamera) map.jumpTo(routeCam(map, focus, opts.padTop || 0, opts.padBottom || 0));
+    if (!opts.keepCamera) map.jumpTo(opts.follow && phase(focus).key === 'air' ? planeCam(map, focus, opts.padTop || 0, opts.padBottom || 0) : routeCam(map, focus, opts.padTop || 0, opts.padBottom || 0));
     placePins(map, focus);
   } else if (opts.fitAll) {
     const pts = flights.flatMap(f => f.from?.lat != null && f.to?.lat != null ? [[f.from.lon, f.from.lat], [f.to.lon, f.to.lat]] : []);
@@ -450,7 +470,7 @@ function drawFlightMap(el, f) {
   const box = el.querySelector('#fmap'); if (!box) return;
   if (f.from?.lat == null || f.to?.lat == null) { box.style.display = 'none'; return; }
   if (!ML()) { if (!el._tries) el._tries = 0; if (el._tries++ < 20) setTimeout(() => $('#sheet') === el && drawFlightMap(el, f), 400); else globeFallback(box); return; }
-  try { const map = makeGlobe(box, { interactive: true }); el._map = map; showRoutes(map, [f], f, { padTop: 70, padBottom: el._vis || innerHeight * 0.55 }); } catch (e) { console.warn(e); globeFallback(box); }
+  try { const map = makeGlobe(box, { interactive: true }); el._map = map; showRoutes(map, [f], f, { follow: true, padTop: 70, padBottom: el._vis || innerHeight * 0.55 }); } catch (e) { console.warn(e); globeFallback(box); }
 }
 // Home: one persistent full-screen globe behind the flight list
 let homeGlobe = null;
@@ -600,12 +620,13 @@ function openFlight(id, src = 'flights') {
       <button class="btn sm danger" data-act="delete" data-id="${f.id}" data-src="${src}">Delete</button>
     </div></div></div>`;
   document.body.appendChild(el); document.body.style.overflow = 'hidden';
-  attachDrag(el, vis => { el._vis = vis; const m = el._map; if (m && m._focus) { m.easeTo({ ...routeCam(m, f, 70, vis), duration: 420 }); setTimeout(() => m._focus && placePins(m, f), 440); } });
+  attachDrag(el, vis => { el._vis = vis; const m = el._map; if (m && m._focus) { m.easeTo({ ...(phase(f).key === 'air' ? planeCam(m, f, 70, vis) : routeCam(m, f, 70, vis)), duration: 420 }); setTimeout(() => m._focus && placePins(m, f), 440); } });
   setTimeout(() => drawFlightMap(el, f), 30);
   if (ph.key === 'air') {
     const tick = async () => { if (!el.isConnected) return clearInterval(el._liveTimer);
       if (await fetchLivePos(f)) { save(false); const ln = el.querySelector('#liveLine'); if (ln) ln.textContent = liveLine(f); if (el._map) showRoutes(el._map, [f], f, { keepCamera: true }); } };
     el._liveTimer = setInterval(tick, 30000); setTimeout(tick, 600);
+    el._moveTimer = setInterval(() => { if (!el.isConnected) return clearInterval(el._moveTimer); if (el._map) showRoutes(el._map, [f], f, { keepCamera: true }); const ln = el.querySelector('#liveLine'); if (ln) ln.textContent = liveLine(f) || 'Estimated position — looking for live data…'; }, 5000);
   }
 }
 function sheetDrag({ sheet, scroll, grab, snaps, start = 1, onSnap }) {
@@ -947,7 +968,7 @@ async function lookupFlight(num, date) {
       depSched, arrSched, depEst: depEst && depEst !== depSched ? depEst : null, arrEst: arrEst && arrEst !== arrSched ? arrEst : null,
       terminalDep: dep.terminal || '', gateDep: dep.gate || '', terminalArr: arr.terminal || '', gateArr: arr.gate || '', baggage: arr.baggageBelt || '',
       aircraft: x.aircraft?.model || '', status: x.status || '', updatedLive: Date.now(),
-      livePos: x.location?.lat != null ? { lat: x.location.lat, lon: x.location.lon, alt: x.location.altitude?.meter ?? null, speed: x.location.groundSpeed?.meterPerSecond ?? null, track: x.location.trueTrack?.deg ?? null, src: 'AeroDataBox', t: Date.now() } : undefined };
+      livePos: x.location?.lat != null ? { lat: x.location.lat, lon: x.location.lon, alt: x.location.altitude?.meter ?? null, speed: x.location.groundSpeed?.meterPerSecond ?? null, track: x.location.trueTrack?.deg ?? null, src: 'AeroDataBox', t: Math.min(Date.now(), Date.parse(String(x.location.reportedAtUtc || '').replace(' ', 'T').replace(/Z?$/, 'Z')) || Date.now()) } : undefined };
   }).filter(x => x.depSched && x.arrSched);
 }
 async function doLookup() {
