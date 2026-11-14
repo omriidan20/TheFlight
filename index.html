@@ -316,6 +316,19 @@ body.home header{background:linear-gradient(180deg,rgba(2,4,10,.55),rgba(2,4,10,
 .hscroll{flex:1;overflow-y:auto;-webkit-overflow-scrolling:touch;overscroll-behavior:contain;padding:4px 16px calc(130px + env(safe-area-inset-bottom))}
 .hscroll .card.list{background:rgba(255,255,255,.05)}
 .dsheet{touch-action:pan-x}
+.cd .alogo{width:44px;height:44px;margin:0 auto 4px}.cd .alogo img{border-radius:12px;padding:4px}.cd .alogo .badge{width:44px;height:44px;font-size:14px}
+.ac-row,.ac-grid,.dly-row{display:grid;grid-template-columns:1fr 1fr;gap:10px 12px}
+.ac-grid{grid-template-columns:1fr 1fr 1fr;margin-top:12px;padding-top:12px;border-top:1px solid var(--stroke-lo)}
+.ac-row span,.ac-grid span,.dly-row span{display:block;font-size:11px;color:var(--mute);text-transform:uppercase;letter-spacing:.06em;font-weight:700}
+.ac-row b{font-size:17px}.ac-grid b,.dly-row b{font-size:15px}
+.ac-row+.muted{margin-top:10px}
+.dly+.dly{margin-top:16px;padding-top:16px;border-top:1px solid var(--stroke-lo)}
+.dly-hd{display:flex;justify-content:space-between;align-items:baseline;margin-bottom:10px}
+.dly-row{grid-template-columns:1fr 1fr 1fr}
+.dly-bars{display:flex;align-items:flex-end;gap:3px;height:46px;margin-top:12px}
+.dly-bars i{flex:1;background:rgba(255,255,255,.35);border-radius:3px 3px 0 0}.dly-bars i.late{background:#ff6b6b}.dly-bars i.early{background:#5ee08a}
+.pcard.p5{background:linear-gradient(160deg,#173a63,#0e2340)}
+.pcard .pl{margin-top:10px;font-size:14px}.pcard .pl .list-row{border-color:rgba(255,255,255,.12)}
 </style>
 </head>
 <body>
@@ -327,8 +340,8 @@ body.home header{background:linear-gradient(180deg,rgba(2,4,10,.55),rgba(2,4,10,
 <div class="dock" id="dock"><nav class="tabs" id="tabs"></nav><button class="dock-search" id="dockSearch" aria-label="Add a flight"><svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><circle cx="10.5" cy="10.5" r="6.5"/><path d="m20 20-4.6-4.6"/></svg></button></div>
 <input type="file" id="icsFile" accept=".ics,text/calendar" hidden>
 <input type="file" id="backupFile" accept=".json,application/json" hidden>
-<script src="airports.js?v=15"></script>
+<script src="airports.js?v=16"></script>
 <script src="https://unpkg.com/maplibre-gl@5/dist/maplibre-gl.js" defer></script>
-<script src="app.js?v=15"></script>
+<script src="app.js?v=16"></script>
 </body>
 </html>

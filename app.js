@@ -301,7 +301,7 @@ function viewSettings() {
       <p class="muted small" style="margin:0">${liveProxy() ? '✓ Using your OpenSky server.' : 'Leave empty unless live position doesn’t show up.'}</p></div>
     <h2>Sync server</h2><div class="card">${syncServerHtml()}</div>
     <h2>Data</h2><div class="card"><div class="actions" style="margin:0"><button class="btn sm" data-act="backup">Download backup</button><button class="btn sm" data-act="restore">Restore backup</button><button class="btn sm danger" data-act="wipe">Delete all data</button></div></div>
-    <p class="muted small" style="text-align:center">Contrail · version 15</p>`;
+    <p class="muted small" style="text-align:center">Contrail · version 16</p>`;
 }
 
 // ---------- Sheets ----------
@@ -351,7 +351,7 @@ async function communityPos(cs) {
       const r = await fetch(s.url(cs), { signal: ctl.signal }); if (!r.ok) continue;
       const j = await r.json(); reachable = true; liveSrcOk = s.name;
       const a = (j.ac || j.aircraft || []).find(x => (x.flight || '').trim().toUpperCase() === cs);
-      if (a && a.lat != null) return { lat: a.lat, lon: a.lon, alt: typeof a.alt_baro === 'number' ? a.alt_baro * 0.3048 : typeof a.alt_geom === 'number' ? a.alt_geom * 0.3048 : null, ground: a.alt_baro === 'ground', speed: a.gs != null ? a.gs * 0.514444 : null, track: a.track ?? a.true_heading ?? null, src: s.name };
+      if (a && a.lat != null) return { lat: a.lat, lon: a.lon, alt: typeof a.alt_baro === 'number' ? a.alt_baro * 0.3048 : typeof a.alt_geom === 'number' ? a.alt_geom * 0.3048 : null, ground: a.alt_baro === 'ground', speed: a.gs != null ? a.gs * 0.514444 : null, track: a.track ?? a.true_heading ?? null, reg: a.r || '', type: a.t || '', src: s.name };
     } catch (e) {} finally { clearTimeout(to); }
   }
   return reachable ? { notFound: true } : null;
@@ -363,7 +363,7 @@ async function fetchLivePos(f) {
   const est = liveFresh(f) ? [f.livePos.lat, f.livePos.lon] : gcPoint(f.from, f.to, ph.p);
   if (!px) {
     const p = await communityPos(icaoCallsign(f.num));
-    if (p && !p.notFound) { f.livePos = { ...p, t: Date.now() }; f._liveBackoff = 0; return true; }
+    if (p && !p.notFound) { f.livePos = { ...p, t: Date.now() }; if (p.reg && !f.aircraftReg) f.aircraftReg = p.reg; if (p.type && !f.aircraftType) f.aircraftType = p.type; f._liveBackoff = 0; return true; }
     f._liveBackoff = Date.now() + (p ? 2 : 10) * M; return false;
   }
   try {
@@ -534,7 +534,7 @@ function rowItem(f, past) {
   const now = Date.now(), ph = phase(f), d = depT(f), a = arrT(f), plus = dayDiff(f);
   let big, unit;
   if (past) { big = fmtDate(d, f.from?.tz, { day: 'numeric' }); unit = fmtDate(d, f.from?.tz, { month: 'short' }); }
-  else if (ph.key === 'air') { big = '✈︎'; unit = 'In air'; }
+  else if (ph.key === 'air') { big = logo(f.num.slice(0, 2), true); unit = 'In air'; }
   else if (ph.key === 'landed') { big = '✓'; unit = 'Landed'; }
   else if (ph.key === 'cancel') { big = '✕'; unit = 'Canceled'; }
   else { const ms = d - now; if (ms >= 864e5) { big = Math.floor(ms / 864e5); unit = big === 1 ? 'Day' : 'Days'; } else if (ms >= H) { big = Math.floor(ms / H); unit = big === 1 ? 'Hour' : 'Hours'; } else { big = Math.max(1, Math.round(ms / M)); unit = 'Min'; } }
@@ -578,6 +578,16 @@ function viewStats() {
   html += `<div class="listhd" style="margin-top:22px"><b>Past flights</b><span class="muted small">${pastFl.length}</span></div>`;
   html += pastFl.length ? pastList(pastFl) : `<div class="card muted small">Flights you’ve taken show up here after they land.</div>`;
   html += `<h2 style="margin-top:26px">Highlights</h2>`;
+  const withD = s.fl.filter(f => f.depEst && f.depSched);
+  if (withD.length) {
+    const dd = withD.map(depDelay), ontime = Math.round(100 * dd.filter(x => x < 15).length / dd.length), avg = dd.reduce((a, b) => a + Math.max(0, b), 0) / dd.length;
+    const worst = withD.reduce((a, b) => depDelay(b) > depDelay(a) ? b : a);
+    const byAl = {}; withD.forEach(f => { const k = f.airline || airlineOf(f.num) || f.num.slice(0, 2); (byAl[k] ||= []).push(Math.max(0, depDelay(f))); });
+    const alRows = Object.entries(byAl).map(([k, v]) => [k, v.reduce((a, b) => a + b, 0) / v.length, v.length]).sort((a, b) => b[1] - a[1]).slice(0, 4);
+    html += `<div class="pcard p5"><div class="pt">Punctuality</div><div class="pgrid" style="margin-top:12px"><div><span>On time</span><b>${ontime}%</b><em>departed within 15 min</em></div><div><span>Average delay</span><b>${dur(avg * M)}</b><em>${withD.length} flights with live data</em></div></div>
+      ${depDelay(worst) >= 15 ? `<div class="ps" style="margin-top:12px">Worst: ${esc(worst.num)} ${esc(worst.from?.iata)}→${esc(worst.to?.iata)}, ${dur(depDelay(worst) * M)} late</div>` : ''}
+      ${alRows.length > 1 ? `<div class="pl">${alRows.map(([k, v, n]) => `<div class="list-row"><span>${esc(k)}</span><span>${v < 1 ? 'on time' : dur(v * M) + ' avg'} · ${n}</span></div>`).join('')}</div>` : ''}</div>`;
+  }
   if (lost > 0) html += `<div class="pcard p2"><b class="hugeN">${lost >= 60 ? Math.round(lost / 60) : lost}</b><div class="pt">${lost >= 60 ? 'hours' : 'minutes'} lost to delays</div><div class="ps">Delayed flights averaged ${dur(lost / delayed.length * M)} late</div></div>`;
   if (s.aircraft[0]) html += `<div class="pcard p3"><div class="pt">Most flown aircraft</div><b class="bigN">${esc(s.aircraft[0][0])}</b><div class="ps">${s.aircraft[0][1]} flight${s.aircraft[0][1] > 1 ? 's' : ''}</div></div>`;
   if (s.longest) html += `<div class="pcard p4"><div class="pt">Longest flight</div><b class="bigN">${esc(s.longest.f.from?.iata)} → ${esc(s.longest.f.to?.iata)}</b><div class="ps">${fmtDist(s.longest.d)} · ${esc(s.longest.f.num)}</div></div>`;
@@ -612,6 +622,8 @@ function openFlight(id, src = 'flights') {
       ${tile('baggage', 'Baggage belt', f.baggage, '🧳')}${tile('aircraft', 'Aircraft', f.aircraft, '✈︎')}
     </div>
     ${tile('notes', 'Notes', f.notes, '📝').replace('class="tile"', 'class="tile wide"')}
+    <h2>Aircraft</h2><div class="card" id="acCard"></div>
+    <h2>Delay history</h2><div class="card" id="dlCard"></div>
     <div class="actions">
       ${!friend ? `<button class="btn pri sm" data-act="share-one" data-id="${f.id}">Share</button>` : `<button class="btn sm" data-act="copy-friend" data-id="${f.id}">I'm on this flight too</button>`}
       <button class="btn sm" data-act="ics-one" data-id="${f.id}" data-src="${src}">Add to calendar</button>
@@ -622,6 +634,7 @@ function openFlight(id, src = 'flights') {
   document.body.appendChild(el); document.body.style.overflow = 'hidden';
   attachDrag(el, vis => { el._vis = vis; const m = el._map; if (m && m._focus) { m.easeTo({ ...(phase(f).key === 'air' ? planeCam(m, f, 70, vis) : routeCam(m, f, 70, vis)), duration: 420 }); setTimeout(() => m._focus && placePins(m, f), 440); } });
   setTimeout(() => drawFlightMap(el, f), 30);
+  fillFlightExtras(el, f);
   if (ph.key === 'air') {
     const tick = async () => { if (!el.isConnected) return clearInterval(el._liveTimer);
       if (await fetchLivePos(f)) { save(false); const ln = el.querySelector('#liveLine'); if (ln) ln.textContent = liveLine(f); if (el._map) showRoutes(el._map, [f], f, { keepCamera: true }); } };
@@ -967,7 +980,7 @@ async function lookupFlight(num, date) {
     return { num: normNum(x.number || num), airline: x.airline?.name || airlineOf(num), from: parseAdbAirport(dep), to: parseAdbAirport(arr),
       depSched, arrSched, depEst: depEst && depEst !== depSched ? depEst : null, arrEst: arrEst && arrEst !== arrSched ? arrEst : null,
       terminalDep: dep.terminal || '', gateDep: dep.gate || '', terminalArr: arr.terminal || '', gateArr: arr.gate || '', baggage: arr.baggageBelt || '',
-      aircraft: x.aircraft?.model || '', status: x.status || '', updatedLive: Date.now(),
+      aircraft: x.aircraft?.model || '', aircraftReg: x.aircraft?.reg || '', aircraftModeS: x.aircraft?.modeS || '', status: x.status || '', updatedLive: Date.now(),
       livePos: x.location?.lat != null ? { lat: x.location.lat, lon: x.location.lon, alt: x.location.altitude?.meter ?? null, speed: x.location.groundSpeed?.meterPerSecond ?? null, track: x.location.trueTrack?.deg ?? null, src: 'AeroDataBox', t: Math.min(Date.now(), Date.parse(String(x.location.reportedAtUtc || '').replace(' ', 'T').replace(/Z?$/, 'Z')) || Date.now()) } : undefined };
   }).filter(x => x.depSched && x.arrSched);
 }
@@ -998,7 +1011,7 @@ async function refreshFlight(f) {
   if (!res) return false;
   const m = res.find(r => r.from.iata === f.from?.iata) || res[0];
   f.depEst = m.depEst; f.arrEst = m.arrEst;
-  ['terminalDep', 'gateDep', 'terminalArr', 'gateArr', 'baggage', 'aircraft', 'status', 'updatedLive', 'livePos'].forEach(k => { if (m[k]) f[k] = m[k]; });
+  ['terminalDep', 'gateDep', 'terminalArr', 'gateArr', 'baggage', 'aircraft', 'status', 'updatedLive', 'livePos', 'aircraftReg', 'aircraftModeS'].forEach(k => { if (m[k]) f[k] = m[k]; });
   if (f.from && !f.from.lat) f.from = m.from; if (f.to && !f.to.lat) f.to = m.to;
   f.updatedAt = Date.now();
   return true;
@@ -1012,6 +1025,71 @@ async function refreshAll(force) {
   for (const f of due) { try { if (await refreshFlight(f)) n++; } catch (e) { console.warn(e); } }
   if (n) { save(); render(); }
   if (force) toast(n ? `Updated ${n} flight${n > 1 ? 's' : ''}` : 'Nothing to refresh right now');
+}
+
+// ---------- Aircraft details & delay history ----------
+const adbGet = async path => {
+  const r = await fetch('https://aerodatabox.p.rapidapi.com' + path, { headers: { 'X-RapidAPI-Key': S.settings.apiKey, 'X-RapidAPI-Host': 'aerodatabox.p.rapidapi.com' } });
+  if (r.status === 204 || r.status === 404) return null; if (!r.ok) throw new Error(`(${r.status})`); return r.json();
+};
+const cacheGet = (k, maxAge) => { const c = readJSON(k, null); return c && Date.now() - c.t < maxAge ? c : null; };
+const cacheSet = (k, d) => { try { localStorage.setItem(k, JSON.stringify({ t: Date.now(), d })); } catch (e) {} };
+async function aircraftInfo(reg) {
+  const k = 'contrail.ac.' + reg, c = cacheGet(k, 30 * 864e5); if (c) return c.d;
+  if (!S.settings.apiKey) return null;
+  const d = await adbGet(`/aircrafts/reg/${encodeURIComponent(reg)}`); cacheSet(k, d); return d;
+}
+const tsMin = v => { if (typeof v === 'number') return v; if (typeof v !== 'string') return null; const neg = v.trim().startsWith('-'); const m = v.replace('-', '').match(/^(?:(\d+)\.)?(\d+):(\d+)(?::(\d+))?/); if (!m) return null; const t = (+(m[1] || 0)) * 1440 + (+m[2]) * 60 + (+m[3]) + (+(m[4] || 0)) / 60; return neg ? -t : t; };
+const pctValues = c => (c?.delayPercentiles || []).map(x => x == null ? null : typeof x === 'object' ? tsMin(x.delay ?? x.value ?? x.minutes ?? x.delayMinutes) : tsMin(x)).filter(v => v != null && isFinite(v));
+async function delayStats(num) {
+  const k = 'contrail.dl.' + num, c = cacheGet(k, 7 * 864e5); if (c) return c.d;
+  if (!S.settings.apiKey) return null;
+  let d = null;
+  for (const p of [`/flights/${encodeURIComponent(num)}/delays`, `/flights/number/${encodeURIComponent(num)}/delays`]) { try { d = await adbGet(p); if (d) break; } catch (e) { if (!/\(404\)/.test(e.message)) throw e; } }
+  const pick = x => Array.isArray(x) ? x[0] : x;
+  const out = d ? { dep: pick(d.origins || d.departures || (Array.isArray(d) ? d.filter(z => /orig|dep/i.test(z.type || '')) : null)), arr: pick(d.destinations || d.arrivals || (Array.isArray(d) ? d.filter(z => /dest|arr/i.test(z.type || '')) : null)) } : null;
+  cacheSet(k, out); return out;
+}
+function delayBlock(label, c) {
+  const v = pctValues(c); if (v.length < 5) return '';
+  const med = v[Math.floor(v.length / 2)], p90 = v[Math.min(v.length - 1, Math.round(v.length * 0.9) - 1)];
+  const onTime = Math.round(100 * v.filter(x => x <= 15).length / v.length);
+  const max = Math.max(30, ...v.map(Math.abs));
+  const bars = v.map((x, i) => `<i class="${x > 15 ? 'late' : x < 0 ? 'early' : ''}" style="height:${Math.max(6, Math.abs(x) / max * 100)}%" title="${(i + 1) * 5}%: ${Math.round(x)}m"></i>`).join('');
+  return `<div class="dly"><div class="dly-hd"><b>${label}</b><span class="muted small">${c.numConsideredFlights ? `based on ${c.numConsideredFlights} flights` : ''}</span></div>
+    <div class="dly-row"><div><span>Typical</span><b class="${dcls(med)}">${med <= 1 && med >= -1 ? 'On time' : med > 0 ? `${dur(med * M)} late` : `${dur(-med * M)} early`}</b></div><div><span>On time</span><b>${onTime}%</b></div><div><span>Worst 1 in 10</span><b class="${dcls(p90)}">${p90 > 0 ? `${dur(p90 * M)} late` : 'on time'}</b></div></div>
+    <div class="dly-bars">${bars}</div></div>`;
+}
+async function fillFlightExtras(el, f) {
+  const ac = el.querySelector('#acCard'), dl = el.querySelector('#dlCard'); if (!ac || !dl) return;
+  // Aircraft
+  const reg = f.aircraftReg;
+  const base = `<div class="ac-row"><div><span>Aircraft</span><b>${esc(f.aircraft || f.aircraftType || 'Not assigned yet')}</b></div><div><span>Registration</span><b>${esc(reg || '—')}</b></div></div>`;
+  ac.innerHTML = base + (reg ? '<div class="muted small">Loading aircraft details…</div>' : `<div class="muted small">${S.settings.apiKey ? 'The airline assigns the exact aircraft closer to departure.' : 'Turn on live data in Settings to see aircraft details.'}</div>`);
+  if (reg && S.settings.apiKey) {
+    try {
+      const a = await aircraftInfo(reg);
+      if (!el.isConnected) return;
+      if (!a) ac.innerHTML = base + '<div class="muted small">No details found for this aircraft.</div>';
+      else {
+        const yr = d => d ? new Date(d).getFullYear() : '';
+        const cell = (k, v) => v ? `<div><span>${k}</span><b>${esc(v)}</b></div>` : '';
+        ac.innerHTML = `<div class="ac-row"><div><span>Aircraft</span><b>${esc(a.typeName || a.model || f.aircraft || '')}</b></div><div><span>Registration</span><b>${esc(a.reg || reg)}</b></div></div>
+          <div class="ac-grid">${cell('Age', a.ageYears != null ? `${(+a.ageYears).toFixed(1)} years` : '')}${cell('Seats', a.numSeats)}${cell('Engines', [a.numEngines, a.engineType].filter(Boolean).join(' × '))}${cell('First flight', yr(a.firstFlightDate))}${cell('Delivered', yr(a.deliveryDate))}${cell('Airline', a.airlineName)}${cell('Type', a.productionLine || a.modelCode || '')}${a.isFreighter ? cell('Use', 'Freighter') : ''}</div>`;
+        if (!f.aircraft && (a.typeName || a.model)) { f.aircraft = a.typeName || a.model; save(false); }
+      }
+    } catch (e) { if (el.isConnected) ac.innerHTML = base + `<div class="muted small">Couldn’t load aircraft details ${esc(e.message)}.</div>`; }
+  }
+  // Delay history: this flight number (AeroDataBox) + your own history
+  const mine = live(S.flights).filter(x => x.num === f.num && x.id !== f.id && x.depSched && arrT(x) < Date.now());
+  const mineHtml = mine.length ? `<div class="muted small" style="margin-top:8px">You’ve flown ${esc(f.num)} ${mine.length} time${mine.length > 1 ? 's' : ''} before${mine.some(x => x.depEst) ? ` · average departure delay ${dur(Math.max(0, mine.reduce((t, x) => t + depDelay(x), 0) / mine.length) * M)}` : ''}.</div>` : '';
+  if (!S.settings.apiKey) { dl.innerHTML = `<div class="muted small">Turn on live data in Settings to see how often ${esc(f.num)} is late.</div>${mineHtml}`; return; }
+  dl.innerHTML = `<div class="muted small">Loading delay history…</div>`;
+  try {
+    const d = await delayStats(f.num); if (!el.isConnected) return;
+    const html = d ? delayBlock(`Departure from ${esc(f.from?.iata || '')}`, d.dep) + delayBlock(`Arrival at ${esc(f.to?.iata || '')}`, d.arr) : '';
+    dl.innerHTML = (html || `<div class="muted small">Not enough history for ${esc(f.num)} yet.</div>`) + mineHtml;
+  } catch (e) { if (el.isConnected) dl.innerHTML = `<div class="muted small">Couldn’t load delay history ${esc(e.message)}.</div>${mineHtml}`; }
 }
 
 // ---------- Calendar (.ics) ----------

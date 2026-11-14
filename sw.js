@@ -1,4 +1,4 @@
-const CACHE = 'contrail-v15';
+const CACHE = 'contrail-v16';
 const SHELL = ['./', 'index.html', 'app.js', 'airports.js', 'icon.svg', 'manifest.webmanifest'];
 self.addEventListener('install', e => { e.waitUntil(caches.open(CACHE).then(c => c.addAll(SHELL))); self.skipWaiting(); });
 self.addEventListener('activate', e => { e.waitUntil(caches.keys().then(ks => Promise.all(ks.filter(k => k !== CACHE).map(k => caches.delete(k))))); self.clients.claim(); });
