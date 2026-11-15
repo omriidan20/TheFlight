@@ -118,8 +118,20 @@ const ALIASES = (() => {
     const l = n.toLowerCase(); m.set(l, c);
     const short = l.replace(/\s+(air ?lines|airways|airline|air)$/, ''); if (short.length >= 3) m.set(short, c);
   });
+  // the larger code table: codes and full names only (short forms would clash with ordinary words)
+  const learned = readJSON('contrail.airlines', {}), curatedCodes = { ...AIRLINES };
+  Object.entries({ ...(window.AIRLINES_EXT || {}), ...learned }).forEach(([c, [n, i]]) => {
+    const curated = c in curatedCodes && !learned[c];
+    if (!curated) { AIRLINES[c] = n; if (i && !AIRLINE_ICAO[i]) AIRLINE_ICAO[i] = c; }
+    const l = n.toLowerCase(); if (l.length >= 6 && !m.has(l)) m.set(l, c);
+  });
   return [...m.entries()].sort((a, b) => b[0].length - a[0].length);
 })();
+function learnAirline(code, name, icao) {
+  if (!/^[A-Z0-9]{2}$/.test(code || '') || !name || AIRLINES[code] === name) return;
+  AIRLINES[code] = name; if (/^[A-Z]{3}$/.test(icao || '')) { AIRLINE_ICAO[icao] = code; AIRLINE_ICAO_REV[code] = icao; }
+  const l = readJSON('contrail.airlines', {}); l[code] = [name, icao || '']; try { localStorage.setItem('contrail.airlines', JSON.stringify(l)); } catch (e) {}
+}
 const mkNum = (c, n) => ({ num: c + String(n).replace(/^0+(?=\d)/, ''), iata: c, airline: AIRLINES[c] || '' });
 function parseFlight(raw) {
   const s = (raw || '').trim(); if (!s) return null;
@@ -141,7 +153,7 @@ function parseFlight(raw) {
 function detectChip(p) {
   if (!p) return '';
   if (p.partial) return `<div class="chip">${logo(p.iata)}<div class="sp"><b>${esc(p.airline)}</b><span class="muted small">Now add the flight number</span></div></div>`;
-  if (p.unknown) return `<div class="chip">${badge(p.iata)}<div class="sp"><b>Flight ${esc(p.num)}</b><span class="muted small">Airline “${esc(p.iata)}” not in the list — that’s OK, it still works</span></div></div>`;
+  if (p.unknown) return `<div class="chip">${badge(p.iata)}<div class="sp"><b>Flight ${esc(p.num)}</b><span class="muted small">Airline ${esc(p.iata)} · looking it up…</span></div></div>`;
   return `<div class="chip">${logo(p.iata)}<div class="sp"><b>${esc(p.airline)}</b><span class="muted small">Flight ${esc(p.num)}${p.via ? ' · from ' + esc(p.via) : ''}</span></div><span class="pill ok">✓</span></div>`;
 }
 const MONTHS = ['jan', 'feb', 'mar', 'apr', 'may', 'jun', 'jul', 'aug', 'sep', 'oct', 'nov', 'dec'];
@@ -318,7 +330,7 @@ function viewSettings() {
       <div class="actions" style="margin:0"><button class="btn pri sm" data-act="sys-save">Save for everyone</button><button class="btn sm" data-act="test-key">Test key</button></div>
       <p class="muted small" style="margin-bottom:0">Only you can see or change these. Every member uses them.</p></div>` : ''}
     <h2>Data</h2><div class="card"><div class="actions" style="margin:0"><button class="btn sm" data-act="backup">Download backup</button><button class="btn sm" data-act="restore">Restore backup</button><button class="btn sm danger" data-act="wipe">Delete all data</button></div></div>
-    <p class="muted small" style="text-align:center">Contrail · version 30</p>`;
+    <p class="muted small" style="text-align:center">Contrail · version 31</p>`;
 }
 
 // ---------- Sheets ----------
@@ -1109,6 +1121,7 @@ async function lookupFlight(num, date, by = 'number') {
     const depAct = adbTime(dep.runwayTime) || adbTime(dep.actualTime), arrAct = adbTime(arr.runwayTime) || adbTime(arr.actualTime);
     const depEst = depAct || adbTime(dep.revisedTime) || adbTime(dep.predictedTime);
     const arrEst = arrAct || adbTime(arr.revisedTime) || adbTime(arr.predictedTime);
+    learnAirline(normNum(x.number || num).slice(0, 2), x.airline?.name, x.airline?.icao);
     return { num: normNum(x.number || num), airline: x.airline?.name || airlineOf(num), from: parseAdbAirport(dep), to: parseAdbAirport(arr),
       depSched, arrSched, depEst: depEst && depEst !== depSched ? depEst : null, arrEst: arrEst && arrEst !== arrSched ? arrEst : null,
       terminalDep: dep.terminal || '', gateDep: dep.gate || '', terminalArr: arr.terminal || '', gateArr: arr.gate || '', baggage: arr.baggageBelt || '',
