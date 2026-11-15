@@ -330,7 +330,7 @@ function viewSettings() {
       <div class="actions" style="margin:0"><button class="btn pri sm" data-act="sys-save">Save for everyone</button><button class="btn sm" data-act="test-key">Test key</button></div>
       <p class="muted small" style="margin-bottom:0">Only you can see or change these. Every member uses them.</p></div>` : ''}
     <h2>Data</h2><div class="card"><div class="actions" style="margin:0"><button class="btn sm" data-act="backup">Download backup</button><button class="btn sm" data-act="restore">Restore backup</button><button class="btn sm danger" data-act="wipe">Delete all data</button></div></div>
-    <p class="muted small" style="text-align:center">Contrail · version 31</p>`;
+    <p class="muted small" style="text-align:center">Contrail · version 32</p>`;
 }
 
 // ---------- Sheets ----------
@@ -658,10 +658,10 @@ function rowItem(f, past) {
   else if (ph.key === 'cancel') { big = '✕'; unit = 'Canceled'; }
   else { const ms = d - now; if (ms >= 864e5) { big = Math.floor(ms / 864e5); unit = big === 1 ? 'Day' : 'Days'; } else if (ms >= H) { big = Math.floor(ms / H); unit = big === 1 ? 'Hour' : 'Hours'; } else { big = Math.max(1, Math.round(ms / M)); unit = 'Min'; } }
   const dl = delayMin(f);
-  return `<div class="frow" data-open="${esc(f.id)}" data-src="flights">
-    <div class="cd ${ph.key === 'air' ? 'air' : ''}"><b>${big}</b><span>${unit}</span></div>
+  return `<div class="frow${past ? ' past' : ''}" data-open="${esc(f.id)}" data-src="flights">
+    ${past ? `<div class="cd plogo">${logo(f.num.slice(0, 2), true)}</div>` : `<div class="cd ${ph.key === 'air' ? 'air' : ''}"><b>${big}</b><span>${unit}</span></div>`}
     <div class="fr-main">
-      <div class="fr-top">${logo(f.num.slice(0, 2))}<span>${esc(f.num)}</span><span class="sp"></span><span>${past ? fmtDate(d, f.from?.tz, { year: 'numeric' }) : fmtDate(d, f.from?.tz)}</span></div>
+      <div class="fr-top">${past ? '' : logo(f.num.slice(0, 2))}<span>${esc(f.num)}</span><span class="sp"></span><span>${past ? fmtDate(d, f.from?.tz, { month: 'short', day: 'numeric', year: 'numeric' }) : fmtDate(d, f.from?.tz)}</span></div>
       <div class="fr-title">${cityOf(f.from)} <span class="muted">to</span> ${cityOf(f.to)}</div>
       <div class="fr-times"><span><i>↗</i> <em>${esc(f.from?.iata)}</em> <b class="${dcls(depDelay(f))}">${fmtTime(d, f.from?.tz)}</b></span><span><i>↘</i> <em>${esc(f.to?.iata)}</em> <b class="${dcls(arrDelay(f))}">${fmtTime(a, f.to?.tz)}</b>${plus ? `<sup>${plus > 0 ? '+' : ''}${plus}</sup>` : ''}</span></div>
       ${ph.key === 'air' ? `<div class="bar"><i style="width:${ph.p * 100}%"></i></div><div class="small" style="color:var(--acc)">Lands in ${dur(a - now)}</div>` : ''}
