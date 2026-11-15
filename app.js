@@ -330,7 +330,7 @@ function viewSettings() {
       <div class="actions" style="margin:0"><button class="btn pri sm" data-act="sys-save">Save for everyone</button><button class="btn sm" data-act="test-key">Test key</button></div>
       <p class="muted small" style="margin-bottom:0">Only you can see or change these. Every member uses them.</p></div>` : ''}
     <h2>Data</h2><div class="card"><div class="actions" style="margin:0"><button class="btn sm" data-act="backup">Download backup</button><button class="btn sm" data-act="restore">Restore backup</button><button class="btn sm danger" data-act="wipe">Delete all data</button></div></div>
-    <p class="muted small" style="text-align:center">Contrail · version 32</p>`;
+    <p class="muted small" style="text-align:center">Contrail · version 33</p>`;
 }
 
 // ---------- Sheets ----------
@@ -722,7 +722,7 @@ function openFlight(id, src = 'flights') {
   const confirmed = f.override === 'landed' || f.arrActual || /arrived|landed/i.test(f.status || '');
   const status = ph.key === 'divert' ? (f.divertedTo?.iata ? `Diverted to ${cityOf(f.divertedTo)} (${esc(f.divertedTo.iata)})` : 'Diverted') : ph.key === 'cancel' ? ph.label
     : ph.key === 'air' ? `Lands in ${dur(a - now)}` : ph.key === 'landed' ? (confirmed ? `Landed ${fmtDate(a, f.to?.tz)}` : `Due to land ${fmtDate(a, f.to?.tz)}`) : `Departs in ${dur(d - now)}`;
-  const sub2 = ph.key === 'divert' ? `Did not arrive at ${esc(f.to?.iata || '')}` : ph.key === 'cancel' ? 'This flight did not operate' : ph.key === 'landed' ? (!confirmed ? 'Not confirmed by live data' : dl >= 15 ? `Arrived ${dur(dl * M)} late` : 'Completed') : dl >= 15 ? `Delayed ${dur(dl * M)}` : f.status && !/unknown/i.test(f.status) ? esc(f.status) : f.estArr ? 'Arrival time is estimated — tap it to set' : f.updatedLive ? 'On time' : 'Scheduled';
+  const sub2 = ph.key === 'divert' ? `Did not arrive at ${esc(f.to?.iata || '')}${f.divertNote ? ' · ' + esc(f.divertNote) : ''}` : ph.key === 'cancel' ? 'This flight did not operate' : ph.key === 'landed' ? (!confirmed ? 'Not confirmed by live data' : dl >= 15 ? `Arrived ${dur(dl * M)} late` : 'Completed') : dl >= 15 ? `Delayed ${dur(dl * M)}` : f.status && !/unknown/i.test(f.status) ? esc(f.status) : f.estArr ? 'Arrival time is estimated — tap it to set' : f.updatedLive ? 'On time' : 'Scheduled';
   const km = distKm(f.from, f.to);
   const overnight = plus > 0 || (+localHM(d, f.from?.tz).slice(0, 2) >= 21);
   const gate = (term, g, which) => `<button class="gatechip" data-act="tile" data-field="${which}" data-id="${f.id}" data-src="${src}"><b>${esc(g || '—')}</b><span>${term ? 'Terminal ' + esc(term) : 'Gate'}</span></button>`;
@@ -1152,19 +1152,27 @@ async function testKey(btn) {
   catch (e) { toast(/40[13]/.test(e.message) ? 'Key not accepted — check you subscribed to the Basic plan' : e.message); }
   SYS.adbKey = prev; btn.disabled = false; btn.textContent = 'Test key';
 }
-const CHECK_V = 2; // bump to re-verify past flights with newer checks
+const CHECK_V = 3; // bump to re-verify past flights with newer checks
 async function refreshFlight(f) {
   const res = await lookupFlight(f.num, localDate(f.depSched, f.from?.tz));
   f.lastCheck = Date.now();
-  if (!res || !res.length) return false;
+  if (!res || !res.length) { if (arrT(f) < Date.now() - H) f.checkV = CHECK_V; return false; }
   const fromI = f.from?.iata, toI = f.to?.iata;
   const m = res.find(r => r.from.iata === fromI && r.to.iata === toI) || res.find(r => r.from.iata === fromI) || res[0];
   // Diversion: the flight is marked Diverted, or the same flight number has a leg from the same origin to a different airport
   const sideLeg = res.find(r => r !== m && r.from.iata === fromI && r.to.iata !== toI);
-  const contLeg = res.find(r => r !== m && r.to.iata === toI && r.from.iata !== fromI);
-  const isDiv = /divert/i.test(m.status || '') || (sideLeg && /divert|arrived|landed/i.test(sideLeg.status || '') && m.to.iata === toI && !m.arrActual);
-  f.diverted = !!isDiv; f.divertedTo = isDiv ? slimAp(m.to.iata !== toI ? m.to : sideLeg?.to || contLeg?.from || null) : null;
-  f.depEst = m.depEst; f.arrEst = m.arrEst; f.depActual = m.depActual; f.arrActual = m.arrActual; f.status = m.status || f.status;
+  // A leg of the same flight number from somewhere else to our destination, after our departure, means the plane
+  // landed there first (e.g. UA168 TLV→EWR diverted to Athens, then "UA168 ATH→EWR" continued or was canceled).
+  // It often appears under the next day's date, so for finished flights we look there too.
+  let later = res;
+  if (arrT(f) < Date.now() - H && !f.override) { try { later = res.concat((await lookupFlight(f.num, localDate(f.depSched + 864e5, f.from?.tz))) || []); } catch (e) {} }
+  const contLeg = later.find(r => r !== m && r.to.iata === toI && r.from.iata !== fromI && r.depSched > m.depSched && r.depSched - m.depSched < 40 * H);
+  const exact = m.from.iata === fromI && m.to.iata === toI;
+  const isDiv = /divert/i.test(m.status || '') || (sideLeg && /divert|arrived|landed/i.test(sideLeg.status || '') && m.to.iata === toI && !m.arrActual) || (exact && !!contLeg);
+  // once a diversion is found it stays (only the person can override it); a later "Arrived" can't erase it
+  if (isDiv || !f.diverted) { f.diverted = !!isDiv; f.divertedTo = isDiv ? slimAp(m.to.iata !== toI ? m.to : contLeg?.from || sideLeg?.to || null) : null; }
+  if (isDiv && contLeg) f.divertNote = /cancel/i.test(contLeg.status || '') ? `${f.num} ${contLeg.from.iata} → ${contLeg.to.iata} was canceled` : `Continued later as ${f.num} ${contLeg.from.iata} → ${contLeg.to.iata}`;
+  f.depEst = m.depEst; f.arrEst = m.arrEst; f.depActual = m.depActual; f.arrActual = f.diverted ? false : m.arrActual; f.status = f.diverted ? 'Diverted' : m.status || f.status;
   ['terminalDep', 'gateDep', 'terminalArr', 'gateArr', 'baggage', 'aircraft', 'updatedLive', 'livePos', 'aircraftReg', 'aircraftModeS'].forEach(k => { if (m[k]) f[k] = m[k]; });
   if (arrT(f) < Date.now() - H) {
     // Second opinion: what did this aircraft actually fly that day?
@@ -1192,6 +1200,7 @@ async function refreshAll(force) {
   const now = Date.now();
   const every = f => (now > depT(f) - 3 * H && now < arrT(f) + 30 * M) ? 15 * M : 6 * H;
   const due = [...live(S.flights), ...live(S.friends)].filter(f => (depT(f) - now < 36 * H && arrT(f) > now - 1 * H && (force || !f.updatedLive || now - f.updatedLive > every(f)))
+    || (f.checkV !== CHECK_V && !f.override && arrT(f) < now - 1 * H && arrT(f) > now - 30 * 864e5 && (!f.lastCheck || now - f.lastCheck > 10 * M))
     || (!f.finalChecked && (f.finalTries || 0) < 2 && arrT(f) < now - 1 * H && arrT(f) > now - 14 * 864e5 && (!f.lastCheck || now - f.lastCheck > 3 * H)));
   due.forEach(f => { if (arrT(f) < now - H) f.finalTries = (f.finalTries || 0) + 1; });
   let n = 0;
